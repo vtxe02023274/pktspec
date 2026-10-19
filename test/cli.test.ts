@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,8 +39,25 @@ describe('cli', () => {
     );
   });
 
+  it('generates Java into the package directory', () => {
+    const result = run('gen', 'java', example, '-o', dir, '--package', 'com.example.chat');
+    expect(result).toMatchObject({ code: 0, out: `wrote 14 files to ${dir}` });
+    expect(existsSync(join(dir, 'com/example/chat/Login.java'))).toBe(true);
+  });
+
+  it('rejects an invalid Java package', () => {
+    const result = run('gen', 'java', example, '-o', dir, '--package', 'com.example.new');
+    expect(result).toMatchObject({
+      code: 1,
+      err: "error: 'com.example.new' is not a valid Java package name",
+    });
+  });
+
   it('explains usage mistakes', () => {
-    expect(run('check').err).toContain('check takes exactly one protocol file');
+    expect(run('gen', 'rust', example, '-o', dir).err).toContain(
+      "unknown target 'rust'; expected one of: java",
+    );
+    expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');
     expect(run('frobnicate').code).toBe(2);
     expect(run().code).toBe(2);

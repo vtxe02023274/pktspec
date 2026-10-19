@@ -1,7 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compile, formatDiagnostic } from './compile.js';
+import type { GeneratedFile } from './gen/common.js';
+import { generateJava } from './gen/java.js';
 import type { Protocol } from './model.js';
 
 export interface Output {
@@ -11,10 +14,20 @@ export interface Output {
 
 const USAGE = `Usage:
   pktspec check <protocol.yaml>
+  pktspec gen <target> <protocol.yaml> -o <dir> [options]
+
+Targets:
+  java    Java classes using java.nio.ByteBuffer
 
 Options:
+  -o, --out <dir>        output directory (required for gen)
+      --package <name>   Java package (default: derived from the protocol name)
   -h, --help             show this help
   -v, --version          show the version`;
+
+const GENERATORS: Record<string, (protocol: Protocol, javaPackage?: string) => GeneratedFile[]> = {
+  java: (protocol, javaPackage) => generateJava(protocol, { package: javaPackage }),
+};
 
 const stdio: Output = {
   out: (text) => process.stdout.write(text + '\n'),
@@ -29,6 +42,8 @@ export function main(argv: string[], io: Output = stdio): number {
       args: argv,
       allowPositionals: true,
       options: {
+        out: { type: 'string', short: 'o' },
+        package: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -58,6 +73,37 @@ export function main(argv: string[], io: Output = stdio): number {
       plural(protocol.enums.length, 'enum'),
     ];
     io.out(`${rest[0]}: ok (${counts.join(', ')})`);
+    return 0;
+  }
+
+  if (command === 'gen') {
+    const [target, file] = rest;
+    if (rest.length !== 2 || target === undefined || file === undefined) {
+      return usageError(io, 'gen takes a target and one protocol file');
+    }
+    const generate = GENERATORS[target];
+    if (!generate) {
+      return usageError(
+        io,
+        `unknown target '${target}'; expected one of: ${Object.keys(GENERATORS).join(', ')}`,
+      );
+    }
+    if (!values.out) return usageError(io, 'gen requires --out <dir>');
+    const protocol = load(file, io);
+    if (!protocol) return 1;
+    let files;
+    try {
+      files = generate(protocol, values.package);
+    } catch (error) {
+      io.err(`error: ${(error as Error).message}`);
+      return 1;
+    }
+    for (const generated of files) {
+      const path = join(values.out, generated.path);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, generated.content);
+    }
+    io.out(`wrote ${plural(files.length, 'file')} to ${values.out}`);
     return 0;
   }
 
