@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compile, formatDiagnostic } from './compile.js';
 import type { GeneratedFile } from './gen/common.js';
+import { generateDocs } from './gen/docs.js';
 import { generateJava } from './gen/java.js';
 import type { Protocol } from './model.js';
 
@@ -18,6 +19,7 @@ const USAGE = `Usage:
 
 Targets:
   java    Java classes using java.nio.ByteBuffer
+  docs    Markdown reference
 
 Options:
   -o, --out <dir>        output directory (required for gen)
@@ -27,6 +29,7 @@ Options:
 
 const GENERATORS: Record<string, (protocol: Protocol, javaPackage?: string) => GeneratedFile[]> = {
   java: (protocol, javaPackage) => generateJava(protocol, { package: javaPackage }),
+  docs: (protocol) => generateDocs(protocol),
 };
 
 const stdio: Output = {

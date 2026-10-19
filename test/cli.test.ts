@@ -45,6 +45,11 @@ describe('cli', () => {
     expect(existsSync(join(dir, 'com/example/chat/Login.java'))).toBe(true);
   });
 
+  it('generates docs', () => {
+    expect(run('gen', 'docs', example, '--out', dir).code).toBe(0);
+    expect(existsSync(join(dir, 'chat-room.md'))).toBe(true);
+  });
+
   it('rejects an invalid Java package', () => {
     const result = run('gen', 'java', example, '-o', dir, '--package', 'com.example.new');
     expect(result).toMatchObject({
@@ -55,7 +60,7 @@ describe('cli', () => {
 
   it('explains usage mistakes', () => {
     expect(run('gen', 'rust', example, '-o', dir).err).toContain(
-      "unknown target 'rust'; expected one of: java",
+      "unknown target 'rust'; expected one of: java, docs",
     );
     expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');
