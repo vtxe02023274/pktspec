@@ -1,6 +1,6 @@
 {
   "name": "pktspec",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Describe your game packets once in YAML, then generate encoders, decoders, docs and tests for each language.",
   "keywords": [
     "packet",
