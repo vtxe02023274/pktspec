@@ -1,0 +1,123 @@
+# A small fictional chat room protocol used throughout the README.
+name: chat-room
+version: 1
+endian: little
+opcode: u16
+doc: Clients log in, join rooms and exchange text messages.
+
+enums:
+  LoginStatus:
+    type: u8
+    doc: Outcome of a login attempt.
+    values:
+      OK: 0
+      BAD_PASSWORD: 1
+      BANNED: 2
+      SERVER_FULL: 3
+
+  RoomKind:
+    type: u8
+    values:
+      PUBLIC: 0
+      PRIVATE: 1
+
+structs:
+  User:
+    doc: A user as seen by other users.
+    fields:
+      - name: id
+        type: u32
+      - name: nickname
+        type: string
+        length: u8
+      - name: level
+        type: u8
+
+packets:
+  - name: Login
+    opcode: 0x01
+    direction: c2s
+    doc: First packet a client sends after connecting.
+    fields:
+      - name: account
+        type: string
+        length: u8
+      - name: password_hash
+        type: bytes
+        size: 32
+        doc: SHA-256 of the password.
+      - name: client_version
+        type: u16
+
+  - name: LoginResult
+    opcode: 0x01
+    direction: s2c
+    fields:
+      - name: status
+        type: LoginStatus
+      - name: user
+        type: User
+        doc: Only meaningful when status is OK.
+
+  - name: JoinRoom
+    opcode: 0x02
+    direction: c2s
+    fields:
+      - name: room_id
+        type: u32
+      - name: password
+        type: string
+        length: u8
+        doc: Empty for public rooms.
+
+  - name: RoomJoined
+    opcode: 0x02
+    direction: s2c
+    fields:
+      - name: room_id
+        type: u32
+      - name: kind
+        type: RoomKind
+      - name: members
+        type: User[]
+        length: u8
+
+  - name: Say
+    opcode: 0x03
+    direction: c2s
+    fields:
+      - name: room_id
+        type: u32
+      - name: text
+        type: string
+
+  - name: Message
+    opcode: 0x03
+    direction: s2c
+    doc: A message someone said in a room, including the sender.
+    fields:
+      - name: room_id
+        type: u32
+      - name: sender_id
+        type: u32
+      - name: text
+        type: string
+      - name: sent_at
+        type: i64
+        doc: Unix time in milliseconds.
+
+  - name: LeaveRoom
+    opcode: 0x04
+    direction: c2s
+    fields:
+      - name: room_id
+        type: u32
+
+  - name: UserLeft
+    opcode: 0x04
+    direction: s2c
+    fields:
+      - name: room_id
+        type: u32
+      - name: user_id
+        type: u32

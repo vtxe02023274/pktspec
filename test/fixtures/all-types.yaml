@@ -1,0 +1,83 @@
+name: all_types
+version: '2.1'
+endian: big
+opcode: u8
+
+enums:
+  Small:
+    type: i8
+    values:
+      MINUS: -128
+      ZERO: 0
+      PLUS: 127
+  Wide:
+    type: u32
+    values:
+      LOW: 0
+      HIGH: 4294967295
+
+structs:
+  Point:
+    fields:
+      - { name: x, type: i16 }
+      - { name: y, type: i16 }
+  Node:
+    doc: Recursion is allowed through prefixed arrays.
+    fields:
+      - { name: label, type: string, length: u8 }
+      - { name: children, type: 'Node[]', length: u8 }
+  Empty:
+    fields: []
+
+packets:
+  - name: Numbers
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: a_u8, type: u8 }
+      - { name: a_u16, type: u16 }
+      - { name: a_u32, type: u32 }
+      - { name: a_u64, type: u64 }
+      - { name: a_i8, type: i8 }
+      - { name: a_i16, type: i16 }
+      - { name: a_i32, type: i32 }
+      - { name: a_i64, type: i64 }
+      - { name: a_f32, type: f32 }
+      - { name: a_f64, type: f64 }
+      - { name: a_bool, type: bool }
+
+  - name: Texts
+    opcode: 2
+    direction: c2s
+    fields:
+      - { name: short_text, type: string, length: u8 }
+      - { name: text, type: string }
+      - { name: long_text, type: string, length: u32 }
+      - { name: blob, type: bytes, length: u32 }
+      - { name: hash, type: bytes, size: 4 }
+
+  - name: Collections
+    opcode: 2
+    direction: s2c
+    doc: Reuses opcode 2 in the other direction.
+    fields:
+      - { name: ids, type: 'u32[]' }
+      - { name: names, type: 'string[]', length: u8 }
+      - { name: flags, type: 'bool[3]' }
+      - { name: corners, type: 'Point[4]' }
+      - { name: path, type: 'Point[]', length: u32 }
+      - { name: kinds, type: 'Small[]' }
+
+  - name: Nested
+    opcode: 3
+    direction: s2c
+    fields:
+      - { name: origin, type: Point }
+      - { name: tree, type: Node }
+      - { name: small, type: Small }
+      - { name: wide, type: Wide }
+      - { name: nothing, type: Empty }
+
+  - name: Ping
+    opcode: 0xFF
+    direction: s2c
