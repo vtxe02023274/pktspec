@@ -1,0 +1,4 @@
+dist
+coverage
+test/golden
+package-lock.json

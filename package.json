@@ -1,0 +1,48 @@
+{
+  "name": "pktspec",
+  "version": "0.0.0",
+  "description": "Describe your game packets once in YAML, then generate encoders, decoders, docs and tests for each language.",
+  "keywords": [
+    "packet",
+    "protocol",
+    "codegen",
+    "game-server",
+    "binary",
+    "yaml"
+  ],
+  "license": "MIT",
+  "author": "冷牛",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vtxe02023274/pktspec.git"
+  },
+  "type": "module",
+  "bin": {
+    "pktspec": "dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^20.19.43",
+    "eslint": "^9.39.5",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^4.1.12"
+  }
+}
