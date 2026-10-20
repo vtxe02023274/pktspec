@@ -49,6 +49,7 @@ packets:
   - name: Texts
     opcode: 2
     direction: c2s
+    doc: 'Saves to C:\users\game\save.dat, 存檔 */'
     fields:
       - { name: short_text, type: string, length: u8 }
       - { name: text, type: string }

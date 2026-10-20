@@ -5,7 +5,11 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** Opcode {@code 0x02}, sent from client to server. */
+/**
+ * Saves to C:&#92;users&#92;game&#92;save.dat, \u5b58\u6a94 *&#47;
+ *
+ * <p>Opcode {@code 0x02}, sent from client to server.
+ */
 public final class Texts implements Packet {
     public static final int OPCODE = 0x02;
 

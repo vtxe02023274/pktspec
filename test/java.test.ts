@@ -34,6 +34,16 @@ describe('generateJava', () => {
     expect(() => generateJava(protocol)).toThrow("'Packet' clashes");
   });
 
+  it('writes docs with backslashes and non-ASCII text as plain ASCII', () => {
+    const protocol = chatRoom();
+    protocol.doc = 'Saves to C:\\users\\game\\save.dat\n\u804a\u5929 \ud83d\ude00';
+    const files = generateJava(protocol);
+    const entry = files.find((f) => f.path.endsWith('/ChatRoomProtocol.java'))!;
+    expect(entry.content).toContain(' * Saves to C:&#92;users&#92;game&#92;save.dat\n');
+    expect(entry.content).toContain(' * \\u804a\\u5929 \\ud83d\\ude00\n');
+    for (const file of files) expect(file.content).not.toMatch(/[^\t\n\x20-\x7e]/);
+  });
+
   it('escapes Java keywords in field names', () => {
     const protocol = chatRoom();
     protocol.structs.push({

@@ -820,16 +820,20 @@ function javadoc(text: string | undefined, indent: string): string {
     .replace(/&/g, '&amp;')
     .replace(/<(?!\/?p>)/g, '&lt;')
     .replace(/(?<!<\/?p)>/g, '&gt;')
-    .replace(/\*\//g, '*&#47;');
-  const lines = escaped.split('\n');
+    .replace(/\*\//g, '*&#47;')
+    // javac decodes \u escapes before it reads comments, so a backslash in a doc can break the file.
+    .replace(/\\/g, '&#92;');
+  const lines = asciiOnly(escaped).split('\n');
   if (lines.length === 1) return `${indent}/** ${lines[0]} */\n`;
   const body = lines.map((line) => (line === '' ? `${indent} *` : `${indent} * ${line}`));
   return `${indent}/**\n${body.join('\n')}\n${indent} */\n`;
 }
 
 function javaString(value: string): string {
-  return JSON.stringify(value).replace(
-    /[\u007f-￿]/g,
-    (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
-  );
+  return asciiOnly(JSON.stringify(value));
+}
+
+/** Keeps generated files ASCII so javac reads them the same under any default encoding. */
+function asciiOnly(text: string): string {
+  return text.replace(/[\u007f-￿]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 }
