@@ -80,7 +80,7 @@ packets:
 
 - Opcodes only need to be unique within one direction; `c2s` and `s2c` may reuse a number.
 - Packet, struct and enum names share one namespace. Declaration order does not matter.
-- Field names may be `snake_case` or `camelCase`; the Java generator converts them to `camelCase`.
+- Field names may be `snake_case` or `camelCase`; the Java generator converts them to `camelCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
 - `doc` ends up in the Javadoc and in the generated docs.
 
 ### Types

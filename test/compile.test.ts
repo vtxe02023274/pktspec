@@ -95,6 +95,22 @@ packets:
     ]);
   });
 
+  it('rejects field names that do not start with a letter after leading underscores', () => {
+    const source = `${header}structs:
+  S:
+    fields:
+      - { name: _1st, type: u8 }
+      - { name: _, type: u8 }
+      - { name: __, type: u8 }
+      - { name: _ok, type: u8 }
+`;
+    expect(errors(source)).toEqual([
+      "5:17 field name '_1st' must start with a letter once leading underscores are dropped for camelCase",
+      "6:17 field name '_' must start with a letter once leading underscores are dropped for camelCase",
+      "7:17 field name '__' must start with a letter once leading underscores are dropped for camelCase",
+    ]);
+  });
+
   it('reports unknown types with a suggestion', () => {
     const source = `${header}structs:
   S:

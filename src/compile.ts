@@ -39,6 +39,8 @@ interface Entry {
 type Entries = Map<string, Entry>;
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// Generators drop underscores when converting field names, so `_1st` would become `1st`.
+const FIELD_NAME_START = /^_*[A-Za-z]/;
 const PROTOCOL_NAME = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const TYPE_EXPRESSION = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d*)\])?$/;
 
@@ -300,13 +302,19 @@ class Compiler {
     if (!entries) return undefined;
     const nameEntry = this.require(entries, 'name', item, 'field');
     const name = nameEntry && this.string(nameEntry, 'field name');
+    const validName = name !== undefined && IDENTIFIER.test(name) && FIELD_NAME_START.test(name);
     if (nameEntry && name !== undefined && !IDENTIFIER.test(name)) {
       this.error(nameEntry.value, `field name '${name}' is not a valid identifier`);
+    } else if (nameEntry && name !== undefined && !validName) {
+      this.error(
+        nameEntry.value,
+        `field name '${name}' must start with a letter once leading underscores are dropped for camelCase`,
+      );
     }
     const typeEntry = this.require(entries, 'type', item, name ? `field '${name}'` : 'field');
     const type = typeEntry && this.fieldType(typeEntry, entries);
     const doc = this.optionalString(entries.get('doc'), "'doc'");
-    if (!nameEntry || name === undefined || !IDENTIFIER.test(name) || !type) return undefined;
+    if (!nameEntry || name === undefined || !validName || !type) return undefined;
     return { field: { name, type, doc }, nameNode: nameEntry.value ?? nameEntry.key };
   }
 
