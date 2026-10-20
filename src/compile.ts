@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node } from 'yaml';
+import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type Scalar } from 'yaml';
 import {
   DEFAULT_LENGTH_TYPE,
   INT_RANGES,
@@ -125,7 +125,9 @@ class Compiler {
   private version(entry: Entry | undefined): string | undefined {
     if (!entry) return undefined;
     const value = isScalar(entry.value) ? entry.value.value : undefined;
-    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (typeof value === 'string') return value;
+    // The parsed number would turn 1.10 into 1.1, so an unquoted version keeps its text.
+    if (typeof value === 'number') return (entry.value as Scalar).source ?? String(value);
     this.error(entry.value ?? entry.key, "'version' must be a string or a number");
     return undefined;
   }

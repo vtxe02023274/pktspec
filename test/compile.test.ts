@@ -49,6 +49,12 @@ describe('compile', () => {
     ]);
   });
 
+  it('keeps an unquoted version as written', () => {
+    expect(compile(`${header}version: 1.10\n`).protocol?.version).toBe('1.10');
+    expect(compile(`${header}version: 1.0 # first\n`).protocol?.version).toBe('1.0');
+    expect(compile(`${header}version: 2\n`).protocol?.version).toBe('2');
+  });
+
   it('applies defaults', () => {
     const { protocol } = compile(header);
     expect(protocol).toMatchObject({ endian: 'little', opcode: 'u16', packets: [] });
