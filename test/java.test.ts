@@ -67,6 +67,22 @@ describe('generateJava', () => {
     expect(file.content).toContain('public short class_;');
   });
 
+  it('renames the wire value field when an enum value is called value', () => {
+    const protocol = chatRoom();
+    protocol.enums.push({
+      name: 'Mode',
+      type: 'u8',
+      values: [
+        { name: 'value', value: 0 },
+        { name: 'value_', value: 1 },
+      ],
+    });
+    const file = generateJava(protocol).find((f) => f.path.endsWith('/Mode.java'))!;
+    expect(file.content).toContain('    private final int value__;');
+    expect(file.content).toContain('        return value__;');
+    expect(file.content).toContain('if (constant.value__ == value) {');
+  });
+
   it('escapes the underscore keyword in enum values', () => {
     const protocol = chatRoom();
     protocol.enums.push({ name: 'Marks', type: 'u8', values: [{ name: '_', value: 0 }] });
