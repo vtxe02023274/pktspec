@@ -81,6 +81,25 @@ packets:
     ]);
   });
 
+  it('rejects built-in and lowercase type names', () => {
+    const source = `${header}enums:
+  u8: { type: u8, values: { A: 0 } }
+structs:
+  string: { fields: [] }
+  goto: { fields: [] }
+  point: { fields: [] }
+packets:
+  - { name: _P, opcode: 1, direction: c2s }
+`;
+    expect(errors(source)).toEqual([
+      "3:3 enum name 'u8' is a built-in type",
+      "5:3 struct name 'string' is a built-in type",
+      "6:3 struct name 'goto' must start with an uppercase letter",
+      "7:3 struct name 'point' must start with an uppercase letter",
+      "9:13 packet name '_P' must start with an uppercase letter",
+    ]);
+  });
+
   it('reports duplicate and clashing field names', () => {
     const source = `${header}structs:
   S:

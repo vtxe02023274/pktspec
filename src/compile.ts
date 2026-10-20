@@ -145,6 +145,15 @@ class Compiler {
       this.error(node, `${kind} name '${name}' is not a valid identifier`);
       return false;
     }
+    if (BUILTIN_TYPES.includes(name)) {
+      this.error(node, `${kind} name '${name}' is a built-in type`);
+      return false;
+    }
+    // Type names become class names, which must not collide with keywords or field names.
+    if (!/^[A-Z]/.test(name)) {
+      this.error(node, `${kind} name '${name}' must start with an uppercase letter`);
+      return false;
+    }
     const previous = this.declared.get(name);
     if (previous) {
       this.error(
