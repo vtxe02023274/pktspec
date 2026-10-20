@@ -81,6 +81,17 @@ packets:
     ]);
   });
 
+  it('rejects names that differ only in case', () => {
+    const source = `${header}structs:
+  User: { fields: [] }
+packets:
+  - { name: USER, opcode: 1, direction: c2s }
+`;
+    expect(errors(source)).toEqual([
+      "5:13 'USER' differs only in case from struct 'User' at line 3; names are used as file names",
+    ]);
+  });
+
   it('rejects built-in and lowercase type names', () => {
     const source = `${header}enums:
   u8: { type: u8, values: { A: 0 } }

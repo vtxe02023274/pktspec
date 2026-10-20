@@ -114,9 +114,12 @@ class JavaGenerator {
     this.prefix = pascalCase(protocol.name);
     this.codec = `${this.prefix}Codec`;
     this.protocolClass = `${this.prefix}Protocol`;
-    const reserved = new Set([...RESERVED_CLASS_NAMES, this.codec, this.protocolClass]);
+    // Compared without case because the generated files may land on a case-insensitive file system.
+    const reserved = new Set(
+      [...RESERVED_CLASS_NAMES, this.codec, this.protocolClass].map((n) => n.toLowerCase()),
+    );
     for (const { name } of [...protocol.enums, ...protocol.structs, ...protocol.packets]) {
-      if (reserved.has(name)) {
+      if (reserved.has(name.toLowerCase())) {
         throw new Error(`'${name}' clashes with a class used by the generated Java code`);
       }
     }
