@@ -380,23 +380,27 @@ ${decoder('s2c', 'decodeFromServer', 'server')}
   private enumClass(definition: Enum): string {
     const valueType = definition.type === 'u32' ? 'long' : 'int';
     const suffix = definition.type === 'u32' ? 'L' : '';
+    const names = definition.values.map((v) => identifier(v.name));
     const constants = definition.values
-      .map((v) => `${INDENT}${identifier(v.name)}(${v.value}${suffix})`)
+      .map((v, i) => `${INDENT}${names[i]}(${v.value}${suffix})`)
       .join(',\n');
+    // Constants and fields share one namespace, so the wire value field steps aside for a constant.
+    let field = 'value';
+    while (names.includes(field)) field += '_';
     return this.file(
       [],
       `${javadoc(definition.doc, '')}public enum ${definition.name} {
 ${constants};
 
-    private final ${valueType} value;
+    private final ${valueType} ${field};
 
     ${definition.name}(${valueType} value) {
-        this.value = value;
+        this.${field} = value;
     }
 
     /** The value used on the wire. */
     public ${valueType} value() {
-        return value;
+        return ${field};
     }
 
     /**
@@ -406,7 +410,7 @@ ${constants};
      */
     public static ${definition.name} fromValue(${valueType} value) {
         for (${definition.name} constant : values()) {
-            if (constant.value == value) {
+            if (constant.${field} == value) {
                 return constant;
             }
         }
