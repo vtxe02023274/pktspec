@@ -53,4 +53,11 @@ describe('generateJava', () => {
     const file = generateJava(protocol).find((f) => f.path.endsWith('/Keywords.java'))!;
     expect(file.content).toContain('public short class_;');
   });
+
+  it('escapes the underscore keyword in enum values', () => {
+    const protocol = chatRoom();
+    protocol.enums.push({ name: 'Marks', type: 'u8', values: [{ name: '_', value: 0 }] });
+    const file = generateJava(protocol).find((f) => f.path.endsWith('/Marks.java'))!;
+    expect(file.content).toContain('    __(0);');
+  });
 });
