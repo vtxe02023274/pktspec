@@ -1,6 +1,6 @@
 {
   "name": "pktspec",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Describe your game packets once in YAML, then generate encoders, decoders, docs and tests for each language.",
   "keywords": [
     "packet",
@@ -10,8 +10,12 @@
     "binary",
     "yaml"
   ],
+  "homepage": "https://github.com/vtxe02023274/pktspec#readme",
+  "bugs": {
+    "url": "https://github.com/vtxe02023274/pktspec/issues"
+  },
   "license": "MIT",
-  "author": "冷牛",
+  "author": "Leng Niu",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vtxe02023274/pktspec.git"
@@ -31,7 +35,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "tsc -p tsconfig.build.json && npm test"
   },
   "dependencies": {
     "yaml": "^2.9.1"

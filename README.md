@@ -18,15 +18,12 @@ flowchart LR
 需要 Node.js 20 以上。
 
 ```sh
-git clone https://github.com/vtxe02023274/pktspec.git
-cd pktspec
-npm install
-npm run build
-
-node dist/bin.js check examples/chat-room.yaml
-node dist/bin.js gen java examples/chat-room.yaml -o out/java --package com.example.chat
-node dist/bin.js gen docs examples/chat-room.yaml -o out/docs
+npx pktspec check protocol.yaml
+npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
+npx pktspec gen docs protocol.yaml -o out/docs
 ```
+
+範例定義檔在 [examples/](examples/)，例如 `examples/chat-room.yaml`。
 
 | 指令                               | 作用                                     |
 | ---------------------------------- | ---------------------------------------- |

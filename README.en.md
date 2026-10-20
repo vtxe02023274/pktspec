@@ -18,15 +18,12 @@ flowchart LR
 Requires Node.js 20 or later.
 
 ```sh
-git clone https://github.com/vtxe02023274/pktspec.git
-cd pktspec
-npm install
-npm run build
-
-node dist/bin.js check examples/chat-room.yaml
-node dist/bin.js gen java examples/chat-room.yaml -o out/java --package com.example.chat
-node dist/bin.js gen docs examples/chat-room.yaml -o out/docs
+npx pktspec check protocol.yaml
+npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
+npx pktspec gen docs protocol.yaml -o out/docs
 ```
+
+Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
 
 | Command                            | What it does                                                   |
 | ---------------------------------- | -------------------------------------------------------------- |

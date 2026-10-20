@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
+第一個發布到 npm 的版本，可以用 `npx pktspec` 執行。
+
+### 不相容的變更
+
+- 封包、結構、列舉名稱必須以大寫字母開頭（#9）。
+
 ### 修正
 
 - Java：`doc` 裡的反斜線與非 ASCII 文字會讓產生的類別無法編譯，現在一律輸出成純 ASCII（#7）。
@@ -25,5 +33,6 @@
 - `pktspec gen java`：只依賴 `java.nio.ByteBuffer` 的 Java 類別，Java 8 以上可編譯。
 - `pktspec gen docs`：Markdown 欄位文件。
 
-[Unreleased]: https://github.com/vtxe02023274/pktspec/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vtxe02023274/pktspec/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vtxe02023274/pktspec/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vtxe02023274/pktspec/releases/tag/v0.1.0
