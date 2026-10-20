@@ -37,6 +37,8 @@ Opcode `0x01` · client → server
 
 Opcode `0x02` · client → server
 
+Saves to C:\users\game\save.dat, 存檔 */
+
 | Field | Type | Size (bytes) | Description |
 | --- | --- | --- | --- |
 | `short_text` | string (u8 length) | 1 + n |  |

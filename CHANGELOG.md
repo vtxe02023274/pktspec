@@ -2,6 +2,12 @@
 
 本專案依循[語意化版本](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### 修正
+
+- Java：`doc` 裡的反斜線與非 ASCII 文字會讓產生的類別無法編譯，現在一律輸出成純 ASCII（#7）。
+
 ## [0.1.0] - 2026-10-20
 
 第一版。
@@ -14,4 +20,5 @@
 - `pktspec gen java`：只依賴 `java.nio.ByteBuffer` 的 Java 類別，Java 8 以上可編譯。
 - `pktspec gen docs`：Markdown 欄位文件。
 
+[Unreleased]: https://github.com/vtxe02023274/pktspec/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/vtxe02023274/pktspec/releases/tag/v0.1.0

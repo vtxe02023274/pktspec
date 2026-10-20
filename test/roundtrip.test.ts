@@ -141,7 +141,7 @@ function runRoundTrip(protocol: Protocol): string[] {
   mkdirSync(classes);
   const javac = spawnSync(
     'javac',
-    ['-encoding', 'UTF-8', '-Xlint:all', '-Werror', '-d', classes, ...sources.map((f) => f.path)],
+    ['-Xlint:all', '-Werror', '-d', classes, ...sources.map((f) => f.path)],
     { encoding: 'utf8' },
   );
   expect(javac.stderr + javac.stdout).toBe('');
