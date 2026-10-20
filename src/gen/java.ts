@@ -47,6 +47,10 @@ const RESERVED_CLASS_NAMES = [
   'Objects',
   'ByteBuffer',
   'ByteOrder',
+  'BufferUnderflowException',
+  'IllegalArgumentException',
+  'StandardCharsets',
+  'Supplier',
 ];
 
 const PRIMITIVE_JAVA: Record<PrimitiveType, { type: string; boxed: string; zero: string }> = {

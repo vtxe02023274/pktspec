@@ -34,6 +34,19 @@ describe('generateJava', () => {
     expect(() => generateJava(protocol)).toThrow("'Packet' clashes");
   });
 
+  it('rejects type names that clash with classes the codec uses', () => {
+    for (const name of [
+      'IllegalArgumentException',
+      'BufferUnderflowException',
+      'StandardCharsets',
+      'Supplier',
+    ]) {
+      const protocol = chatRoom();
+      protocol.structs.push({ name, fields: [] });
+      expect(() => generateJava(protocol)).toThrow(`'${name}' clashes`);
+    }
+  });
+
   it('writes docs with backslashes and non-ASCII text as plain ASCII', () => {
     const protocol = chatRoom();
     protocol.doc = 'Saves to C:\\users\\game\\save.dat\n\u804a\u5929 \ud83d\ude00';
