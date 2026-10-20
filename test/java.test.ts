@@ -34,6 +34,14 @@ describe('generateJava', () => {
     expect(() => generateJava(protocol)).toThrow("'Packet' clashes");
   });
 
+  it('rejects type names that differ from generated classes only in case', () => {
+    for (const name of ['PACKET', 'ChatRoomCODEC']) {
+      const protocol = chatRoom();
+      protocol.structs.push({ name, fields: [] });
+      expect(() => generateJava(protocol)).toThrow(`'${name}' clashes`);
+    }
+  });
+
   it('rejects type names that clash with classes the codec uses', () => {
     for (const name of [
       'IllegalArgumentException',

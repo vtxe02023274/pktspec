@@ -162,6 +162,18 @@ class Compiler {
       );
       return false;
     }
+    // Case-insensitive file systems would let one generated file overwrite the other.
+    const sameFile = [...this.declared].find(
+      ([other]) => other.toLowerCase() === name.toLowerCase(),
+    );
+    if (sameFile) {
+      const [other, { kind: otherKind, node: otherNode }] = sameFile;
+      this.error(
+        node,
+        `'${name}' differs only in case from ${otherKind} '${other}' at line ${this.line(otherNode)}; names are used as file names`,
+      );
+      return false;
+    }
     this.declared.set(name, { kind, node });
     return true;
   }
