@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { compile, formatDiagnostic } from './compile.js';
 import { diffProtocols, diffReport, formatDiff, type Spec } from './diff.js';
 import type { GeneratedFile } from './gen/common.js';
+import { generateCpp } from './gen/cpp.js';
 import { generateCSharp } from './gen/csharp.js';
 import { generateDocs } from './gen/docs.js';
 import { generateJava } from './gen/java.js';
@@ -26,13 +27,14 @@ Targets:
   java        Java classes using java.nio.ByteBuffer
   csharp      C# classes for .NET Standard 2.1 (Unity and .NET)
   typescript  TypeScript classes for browsers and Node.js
+  cpp         C++17 headers using only the standard library
   wireshark   Wireshark Lua dissector
   docs        Markdown reference
 
 Options:
   -o, --out <dir>        output directory (required for gen)
       --package <name>   Java package (default: derived from the protocol name)
-      --namespace <name> C# namespace (default: derived from the protocol name)
+      --namespace <name> C# or C++ namespace (default: derived from the protocol name)
       --port <number>    wireshark: default TCP, UDP and server port (default: none)
       --format <format>  diff output: text (default) or json
   -h, --help             show this help
@@ -51,6 +53,7 @@ const GENERATORS: Record<
   java: (protocol, options) => generateJava(protocol, { package: options.package }),
   csharp: (protocol, options) => generateCSharp(protocol, { namespace: options.namespace }),
   typescript: (protocol) => generateTypeScript(protocol),
+  cpp: (protocol, options) => generateCpp(protocol, { namespace: options.namespace }),
   wireshark: (protocol, options) => generateWireshark(protocol, { port: options.port }),
   docs: (protocol) => generateDocs(protocol),
 };

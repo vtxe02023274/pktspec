@@ -55,6 +55,20 @@ describe('cli', () => {
     expect(readFileSync(join(dir, 'Login.cs'), 'utf8')).toContain('namespace Example.Chat');
   });
 
+  it('generates C++ into the output directory', () => {
+    const result = run('gen', 'cpp', example, '-o', dir, '--namespace', 'Example.Chat');
+    expect(result).toMatchObject({ code: 0, out: `wrote 16 files to ${dir}` });
+    expect(readFileSync(join(dir, 'Login.hpp'), 'utf8')).toContain('namespace Example::Chat {');
+  });
+
+  it('rejects an invalid C++ namespace', () => {
+    const result = run('gen', 'cpp', example, '-o', dir, '--namespace', 'Example.new');
+    expect(result).toMatchObject({
+      code: 1,
+      err: "error: 'Example.new' is not a valid C++ namespace name",
+    });
+  });
+
   it('generates TypeScript into the output directory', () => {
     const result = run('gen', 'typescript', example, '-o', dir);
     expect(result).toMatchObject({ code: 0, out: `wrote 18 files to ${dir}` });
@@ -185,7 +199,7 @@ describe('cli', () => {
 
   it('explains usage mistakes', () => {
     expect(run('gen', 'rust', example, '-o', dir).err).toContain(
-      "unknown target 'rust'; expected one of: java, csharp, typescript, wireshark, docs",
+      "unknown target 'rust'; expected one of: java, csharp, typescript, cpp, wireshark, docs",
     );
     expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');

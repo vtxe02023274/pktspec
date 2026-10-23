@@ -12,6 +12,7 @@ flowchart LR
   check --> java[Java 類別]
   check --> csharp[C# 類別]
   check --> ts[TypeScript 類別]
+  check --> cpp[C++ 標頭檔]
   check --> lua[Wireshark dissector]
   check --> docs[Markdown 文件]
 ```
@@ -26,21 +27,23 @@ npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
+npx pktspec gen cpp protocol.yaml -o out/cpp --namespace Example::Chat
 npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 範例定義檔在 [examples/](examples/)，例如 `examples/chat-room.yaml`。
 
-| 指令                                     | 作用                                                  |
-| ---------------------------------------- | ----------------------------------------------------- |
-| `pktspec check <file>`                   | 檢查定義檔，錯誤會標出行號與欄位                      |
-| `pktspec diff <old> <new>`               | 比對兩個版本，列出線上格式的相容性差異                |
-| `pktspec gen java <file> -o <dir>`       | 產生 Java 類別，`--package` 指定套件名稱              |
-| `pktspec gen csharp <file> -o <dir>`     | 產生 C# 類別，`--namespace` 指定命名空間              |
-| `pktspec gen typescript <file> -o <dir>` | 產生 TypeScript 類別，瀏覽器與 Node.js 都能用         |
-| `pktspec gen wireshark <file> -o <dir>`  | 產生 Wireshark Lua dissector，`--port` 指定預設連接埠 |
-| `pktspec gen docs <file> -o <dir>`       | 產生 Markdown 欄位文件                                |
+| 指令                                     | 作用                                                          |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| `pktspec check <file>`                   | 檢查定義檔，錯誤會標出行號與欄位                              |
+| `pktspec diff <old> <new>`               | 比對兩個版本，列出線上格式的相容性差異                        |
+| `pktspec gen java <file> -o <dir>`       | 產生 Java 類別，`--package` 指定套件名稱                      |
+| `pktspec gen csharp <file> -o <dir>`     | 產生 C# 類別，`--namespace` 指定命名空間                      |
+| `pktspec gen typescript <file> -o <dir>` | 產生 TypeScript 類別，瀏覽器與 Node.js 都能用                 |
+| `pktspec gen cpp <file> -o <dir>`        | 產生 C++17 標頭檔，只用標準函式庫，`--namespace` 指定命名空間 |
+| `pktspec gen wireshark <file> -o <dir>`  | 產生 Wireshark Lua dissector，`--port` 指定預設連接埠         |
+| `pktspec gen docs <file> -o <dir>`       | 產生 Markdown 欄位文件                                        |
 
 錯誤訊息的格式是 `檔案:行:欄: error: 說明`，編輯器可以直接跳到該處：
 
@@ -88,28 +91,29 @@ packets:
 
 - 封包的 opcode 只要在同一個方向內不重複；`c2s` 和 `s2c` 可以共用同一個號碼。
 - 封包、結構、列舉的名稱不能重複（不分大小寫，因為名稱會當成檔名），宣告順序不影響；名稱要以大寫字母開頭，也不能和內建型別同名。
-- 欄位名稱用 `snake_case` 或 `camelCase` 都可以，產生 Java 與 TypeScript 時會轉成 `camelCase`，產生 C# 時會轉成 `PascalCase`；底線會被去掉，所以開頭的底線之後必須是字母（`_1st` 不行）。
-- `doc` 會寫進產生的 Javadoc、C# XML 文件註解、TypeScript 的 JSDoc 和文件。
+- 欄位名稱用 `snake_case` 或 `camelCase` 都可以，產生 Java、TypeScript 與 C++ 時會轉成 `camelCase`，產生 C# 時會轉成 `PascalCase`；底線會被去掉，所以開頭的底線之後必須是字母（`_1st` 不行）。
+- `doc` 會寫進產生的 Javadoc、C# XML 文件註解、TypeScript 的 JSDoc、C++ 的區塊註解和文件。
 
 ### 型別
 
-| 型別             | 寫法                           | 大小（位元組）      | Java 型別                   | C# 型別                            | TypeScript 型別                             |
-| ---------------- | ------------------------------ | ------------------- | --------------------------- | ---------------------------------- | ------------------------------------------- |
-| 無號整數         | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8       | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`     | `number` `number` `number` `bigint`         |
-| 有號整數         | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8       | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`       | `number` `number` `number` `bigint`         |
-| 浮點數           | `f32` `f64`                    | 4 / 8               | `float` `double`            | `float` `double`                   | `number`                                    |
-| 布林             | `bool`                         | 1                   | `boolean`                   | `bool`                             | `boolean`                                   |
-| 字串             | `string`，`length: u8/u16/u32` | 前綴 + UTF-8 位元組 | `String`                    | `string`                           | `string`                                    |
-| 位元組           | `bytes`，`length: u8/u16/u32`  | 前綴 + n            | `byte[]`                    | `byte[]`                           | `Uint8Array`                                |
-| 固定長度位元組   | `bytes`，`size: 16`            | 16                  | `byte[]`                    | `byte[]`                           | `Uint8Array`                                |
-| 陣列（長度前綴） | `T[]`，`length: u8/u16/u32`    | 前綴 + 元素         | `List<T>`                   | `List<T>`                          | `T[]`                                       |
-| 陣列（固定長度） | `T[4]`                         | 4 個元素            | `List<T>`                   | `List<T>`                          | `T[]`                                       |
-| 結構             | `structs` 裡的名稱             | 各欄位相加          | 產生的類別                  | 產生的類別                         | 產生的類別                                  |
-| 列舉             | `enums` 裡的名稱               | 底層整數型別        | 產生的 `enum`               | 產生的 `enum`，成員改成 PascalCase | `const` 物件加聯集型別，成員改成 PascalCase |
+| 型別             | 寫法                           | 大小（位元組）      | Java 型別                   | C# 型別                            | TypeScript 型別                             | C++ 型別                                                       |
+| ---------------- | ------------------------------ | ------------------- | --------------------------- | ---------------------------------- | ------------------------------------------- | -------------------------------------------------------------- |
+| 無號整數         | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8       | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`     | `number` `number` `number` `bigint`         | `std::uint8_t` `std::uint16_t` `std::uint32_t` `std::uint64_t` |
+| 有號整數         | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8       | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`       | `number` `number` `number` `bigint`         | `std::int8_t` `std::int16_t` `std::int32_t` `std::int64_t`     |
+| 浮點數           | `f32` `f64`                    | 4 / 8               | `float` `double`            | `float` `double`                   | `number`                                    | `float` `double`                                               |
+| 布林             | `bool`                         | 1                   | `boolean`                   | `bool`                             | `boolean`                                   | `bool`                                                         |
+| 字串             | `string`，`length: u8/u16/u32` | 前綴 + UTF-8 位元組 | `String`                    | `string`                           | `string`                                    | `std::string`                                                  |
+| 位元組           | `bytes`，`length: u8/u16/u32`  | 前綴 + n            | `byte[]`                    | `byte[]`                           | `Uint8Array`                                | `std::vector<std::uint8_t>`                                    |
+| 固定長度位元組   | `bytes`，`size: 16`            | 16                  | `byte[]`                    | `byte[]`                           | `Uint8Array`                                | `std::array<std::uint8_t, N>`                                  |
+| 陣列（長度前綴） | `T[]`，`length: u8/u16/u32`    | 前綴 + 元素         | `List<T>`                   | `List<T>`                          | `T[]`                                       | `std::vector<T>`                                               |
+| 陣列（固定長度） | `T[4]`                         | 4 個元素            | `List<T>`                   | `List<T>`                          | `T[]`                                       | `std::array<T, N>`                                             |
+| 結構             | `structs` 裡的名稱             | 各欄位相加          | 產生的類別                  | 產生的類別                         | 產生的類別                                  | 產生的 `struct`                                                |
+| 列舉             | `enums` 裡的名稱               | 底層整數型別        | 產生的 `enum`               | 產生的 `enum`，成員改成 PascalCase | `const` 物件加聯集型別，成員改成 PascalCase | 產生的 `enum class`，成員改成 PascalCase                       |
 
 - `length` 沒寫時預設 `u16`，單位是位元組數（字串、位元組）或元素個數（陣列）。
 - Java 沒有無號整數，所以無號型別用大一級的型別存放；`u64` 用 `long`，超過 2^63 的值會以負數表示，可用 `Long.toUnsignedString` 顯示。
 - C# 有原生的無號整數，直接用對應型別，所以整數不需要範圍檢查。
+- C++ 用 `<cstdint>` 的固定寬度整數，所以整數不需要範圍檢查；字串是 `std::string`，位元組原樣複製，不檢查是不是合法的 UTF-8。
 - TypeScript 的 `u64`、`i64` 用 `bigint`，其餘數字都用 `number`；寫入時會檢查範圍，也不接受小數。
 - 列舉的底層型別可用 `u8 u16 u32 i8 i16 i32`。
 - 結構可以透過長度前綴陣列遞迴（例如樹狀結構），但不能直接或透過固定長度陣列包含自己。
@@ -242,6 +246,46 @@ export class Say implements Packet {
 - 沒有 `hashCode`；`f32`、`f64` 的 NaN 一律寫成標準 NaN，不保留原本的位元內容。
 - 型別名稱不能和 `Packet`、`Index`、`Uint8Array`、`Error` 這類產生的程式會用到的名稱衝突。
 
+### C++
+
+C++ 產生的程式碼是 C++17 的標頭檔，只用標準函式庫，沒有 `.cpp`：把輸出目錄加進 include 路徑就能用，伺服器或 Unreal、Unity 的原生外掛都不用另外設定連結。位元組順序依定義檔固定，逐位元組組合，不靠主機的位元組順序；浮點數用 `memcpy` 轉換。命名空間預設由協定名稱轉成 PascalCase，`--namespace Example::Chat`（也接受 `Example.Chat`）可以指定。錯誤用例外回報，所以編譯時要開例外（Unreal 預設是關的）。
+
+```cpp
+#include "ChatRoomProtocol.hpp"
+
+using namespace ChatRoom;
+
+Say say(42, "hello");
+std::vector<std::uint8_t> data = say.encode();  // opcode + 內容
+
+std::unique_ptr<Packet> packet = ChatRoomProtocol::decodeFromClient(data);
+if (packet->opcode() == Say::OpcodeValue) {
+    const Say& received = static_cast<const Say&>(*packet);
+    std::cout << received.text << "\n";
+}
+```
+
+```cpp
+struct Say final : public Packet {
+    static constexpr std::uint16_t OpcodeValue = 0x0003;
+
+    std::uint32_t roomId{};
+    std::string text{};
+
+    std::size_t bodySize() const override;
+    void writeTo(PacketWriter& writer) const override;
+    static Say readFrom(PacketReader& reader);
+    // 另有建構子、opcode、operator==、operator!=
+};
+```
+
+- 解碼回傳 `std::unique_ptr<Packet>`，依 `opcode()` 判斷後轉型。不用 `std::variant`，因為某個方向可能一個封包也沒有（空的 `variant` 不合法），而且伺服器常把封包排進佇列再分派，基底類別指標比較好傳；代價是每個封包一次堆積配置。`decodeFromClient(data, size)` 這種直接吃指標與長度的版本也有。
+- 錯誤都繼承 `std::runtime_error`：`TruncatedPacketError` 是資料不足；`InvalidPacketError` 是無效的資料（長度超過 2^31 - 1），它的子類別 `UnknownOpcodeError`（`opcode()` 取得讀到的值）和 `UnknownEnumValueError` 是 opcode 或列舉值未知；`PacketRangeError` 是寫入時長度前綴放不下。以上共同的基底是 `PacketError`。固定長度陣列與位元組是 `std::array`，大小由型別保證，所以沒有「元素數不對」的錯誤。
+- 成員一律用 `camelCase`；和產生的成員（`opcode`、`bodySize`、`writeTo`）、C++ 保留字、`min`、`max` 這類常被巨集定義的名稱衝突的欄位，會在名稱後面加底線。
+- 結構全部放在 `Structs.hpp`：兩個結構可以用陣列互相包含，每個型別一個標頭就排不出能編譯的順序。封包、列舉各一個標頭，`<協定名稱>Protocol.hpp` 是進入點。
+- 沒有 `hashCode`、`toString`；比較浮點數時 NaN 視為相等。
+- 型別名稱不能和 `Packet`、`PacketReader`、`Structs`、`NULL` 這類產生的程式會用到的名稱衝突。
+
 ### Wireshark
 
 `pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000` 產生一個獨立的 `<協定名稱>.lua`，不依賴其他模組，需要 Wireshark 3.6 以上。抓封包時可以直接看到封包名稱、欄位名稱和列舉名稱，也能用 `chat_room.say.text == "hi"` 這類條件過濾。
@@ -302,7 +346,7 @@ info (2)
 - [x] Markdown 文件產生器
 - [x] C# 產生器（Unity 與 .NET 伺服器）
 - [x] TypeScript 產生器（網頁客戶端與 Node 伺服器）
-- [ ] C++ 產生器
+- [x] C++ 產生器（伺服器與原生外掛）
 - [x] Wireshark Lua dissector：抓封包時直接看到欄位名稱
 - [x] `pktspec diff old.yaml new.yaml`：列出兩個版本的差異與相容性問題
 - [ ] 依定義自動產生 fuzz 測試資料
@@ -311,12 +355,12 @@ info (2)
 ## 開發
 
 ```sh
-npm test            # 單元測試、golden file、Java、C#、TypeScript 往返測試與 Wireshark 測試（Java、C#、Wireshark 要有 javac、dotnet、tshark）
+npm test            # 單元測試、golden file、Java、C#、TypeScript、C++ 往返測試與 Wireshark 測試（Java、C#、C++、Wireshark 要有 javac、dotnet、C++ 編譯器、tshark）
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # 有意修改產生器輸出時，更新 golden file
 ```
 
-往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。Wireshark 的測試會在測試裡組出 pcap 檔（Ethernet、IPv4、UDP 或 TCP），用 `tshark -X lua_script:... -T fields` 讀回每個封包的欄位與專家資訊；需要 `tshark`（含 Lua，在 PATH 或 Windows 預設安裝位置），找不到就略過，設定 `PKTSPEC_REQUIRE_TSHARK` 則改為失敗。
+往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。C++ 的需要 `g++`、`clang++` 或 MSVC 的 `cl` 在 PATH 裡（也可用 `CXX` 環境變數指定），以 `-std=c++17 -Wall -Wextra -Werror -pedantic`（MSVC 是 `/W4 /WX`）編譯產生的標頭與測試程式再執行，找不到編譯器就略過，設定 `PKTSPEC_REQUIRE_CPP` 則改為失敗。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。Wireshark 的測試會在測試裡組出 pcap 檔（Ethernet、IPv4、UDP 或 TCP），用 `tshark -X lua_script:... -T fields` 讀回每個封包的欄位與專家資訊；需要 `tshark`（含 Lua，在 PATH 或 Windows 預設安裝位置），找不到就略過，設定 `PKTSPEC_REQUIRE_TSHARK` 則改為失敗。
 
 ## 授權
 

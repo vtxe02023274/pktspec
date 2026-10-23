@@ -12,6 +12,7 @@ flowchart LR
   check --> java[Java classes]
   check --> csharp[C# classes]
   check --> ts[TypeScript classes]
+  check --> cpp[C++ headers]
   check --> lua[Wireshark dissector]
   check --> docs[Markdown docs]
 ```
@@ -26,21 +27,23 @@ npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
+npx pktspec gen cpp protocol.yaml -o out/cpp --namespace Example::Chat
 npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
 
-| Command                                  | What it does                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| `pktspec check <file>`                   | Validates a definition and reports errors with line and column      |
-| `pktspec diff <old> <new>`               | Compares two versions and lists wire compatibility changes          |
-| `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package                |
-| `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace              |
-| `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js               |
-| `pktspec gen wireshark <file> -o <dir>`  | Generates a Wireshark Lua dissector; `--port` sets the default port |
-| `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                                |
+| Command                                  | What it does                                                                              |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `pktspec check <file>`                   | Validates a definition and reports errors with line and column                            |
+| `pktspec diff <old> <new>`               | Compares two versions and lists wire compatibility changes                                |
+| `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package                                      |
+| `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace                                    |
+| `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js                                     |
+| `pktspec gen cpp <file> -o <dir>`        | Generates C++17 headers using only the standard library; `--namespace` sets the namespace |
+| `pktspec gen wireshark <file> -o <dir>`  | Generates a Wireshark Lua dissector; `--port` sets the default port                       |
+| `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                                                      |
 
 Errors use the `file:line:column: error: message` format that editors can jump to:
 
@@ -88,28 +91,29 @@ packets:
 
 - Opcodes only need to be unique within one direction; `c2s` and `s2c` may reuse a number.
 - Packet, struct and enum names share one namespace and must differ by more than case, because they become file names. Declaration order does not matter. Names must start with an uppercase letter and cannot reuse a built-in type name.
-- Field names may be `snake_case` or `camelCase`; the Java and TypeScript generators convert them to `camelCase` and the C# generator to `PascalCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
-- `doc` ends up in the Javadoc, in the C# XML doc comments, in the TypeScript JSDoc and in the generated docs.
+- Field names may be `snake_case` or `camelCase`; the Java, TypeScript and C++ generators convert them to `camelCase` and the C# generator to `PascalCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
+- `doc` ends up in the Javadoc, in the C# XML doc comments, in the TypeScript JSDoc, in the C++ block comments and in the generated docs.
 
 ### Types
 
-| Type             | Syntax                         | Size (bytes)          | Java type                   | C# type                                 | TypeScript type                                         |
-| ---------------- | ------------------------------ | --------------------- | --------------------------- | --------------------------------------- | ------------------------------------------------------- |
-| Unsigned integer | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8         | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`          | `number` `number` `number` `bigint`                     |
-| Signed integer   | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8         | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`            | `number` `number` `number` `bigint`                     |
-| Float            | `f32` `f64`                    | 4 / 8                 | `float` `double`            | `float` `double`                        | `number`                                                |
-| Boolean          | `bool`                         | 1                     | `boolean`                   | `bool`                                  | `boolean`                                               |
-| String           | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes  | `String`                    | `string`                                | `string`                                                |
-| Bytes            | `bytes`, `length: u8/u16/u32`  | prefix + n            | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            |
-| Fixed bytes      | `bytes`, `size: 16`            | 16                    | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            |
-| Prefixed array   | `T[]`, `length: u8/u16/u32`    | prefix + elements     | `List<T>`                   | `List<T>`                               | `T[]`                                                   |
-| Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   | `List<T>`                               | `T[]`                                                   |
-| Struct           | a name from `structs`          | sum of its fields     | generated class             | generated class                         | generated class                                         |
-| Enum             | a name from `enums`            | its base integer type | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase |
+| Type             | Syntax                         | Size (bytes)          | Java type                   | C# type                                 | TypeScript type                                         | C++ type                                                       |
+| ---------------- | ------------------------------ | --------------------- | --------------------------- | --------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
+| Unsigned integer | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8         | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`          | `number` `number` `number` `bigint`                     | `std::uint8_t` `std::uint16_t` `std::uint32_t` `std::uint64_t` |
+| Signed integer   | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8         | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`            | `number` `number` `number` `bigint`                     | `std::int8_t` `std::int16_t` `std::int32_t` `std::int64_t`     |
+| Float            | `f32` `f64`                    | 4 / 8                 | `float` `double`            | `float` `double`                        | `number`                                                | `float` `double`                                               |
+| Boolean          | `bool`                         | 1                     | `boolean`                   | `bool`                                  | `boolean`                                               | `bool`                                                         |
+| String           | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes  | `String`                    | `string`                                | `string`                                                | `std::string`                                                  |
+| Bytes            | `bytes`, `length: u8/u16/u32`  | prefix + n            | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::vector<std::uint8_t>`                                    |
+| Fixed bytes      | `bytes`, `size: 16`            | 16                    | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::array<std::uint8_t, N>`                                  |
+| Prefixed array   | `T[]`, `length: u8/u16/u32`    | prefix + elements     | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::vector<T>`                                               |
+| Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::array<T, N>`                                             |
+| Struct           | a name from `structs`          | sum of its fields     | generated class             | generated class                         | generated class                                         | generated `struct`                                             |
+| Enum             | a name from `enums`            | its base integer type | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase | generated `enum class`, members in PascalCase                  |
 
 - `length` defaults to `u16`. It counts bytes for strings and bytes, and elements for arrays.
 - Java has no unsigned integers, so unsigned types use the next larger type. `u64` uses `long`; values above 2^63 appear negative and can be printed with `Long.toUnsignedString`.
 - C# has native unsigned integers, so each type maps directly and integers need no range checks.
+- C++ uses the fixed-width integers from `<cstdint>`, so integers need no range checks; strings are `std::string` and their bytes are copied as they are, without checking that they are valid UTF-8.
 - TypeScript uses `bigint` for `u64` and `i64` and `number` for every other numeric type; writing checks the range and rejects fractions.
 - Enum base types can be `u8 u16 u32 i8 i16 i32`.
 - Structs may recurse through prefixed arrays (trees, for example), but cannot contain themselves directly or through a fixed array.
@@ -242,6 +246,46 @@ export class Say implements Packet {
 - There is no `hashCode`, and a `f32` or `f64` NaN is always written as the canonical NaN rather than keeping its original bits.
 - Type names cannot reuse names the generated code depends on, such as `Packet`, `Index`, `Uint8Array` or `Error`.
 
+### C++
+
+The C++ output is C++17 headers that use only the standard library, with no `.cpp` files: add the output directory to the include path and you are done, whether it goes into a server or an Unreal or Unity native plugin, with nothing extra to link. The byte order is fixed by the definition and values are assembled byte by byte, so nothing depends on the host's endianness; floats go through `memcpy`. The namespace defaults to the protocol name in PascalCase, and `--namespace Example::Chat` (`Example.Chat` is accepted too) sets it. Errors are reported with exceptions, so compile with exceptions enabled (Unreal turns them off by default).
+
+```cpp
+#include "ChatRoomProtocol.hpp"
+
+using namespace ChatRoom;
+
+Say say(42, "hello");
+std::vector<std::uint8_t> data = say.encode();  // opcode + body
+
+std::unique_ptr<Packet> packet = ChatRoomProtocol::decodeFromClient(data);
+if (packet->opcode() == Say::OpcodeValue) {
+    const Say& received = static_cast<const Say&>(*packet);
+    std::cout << received.text << "\n";
+}
+```
+
+```cpp
+struct Say final : public Packet {
+    static constexpr std::uint16_t OpcodeValue = 0x0003;
+
+    std::uint32_t roomId{};
+    std::string text{};
+
+    std::size_t bodySize() const override;
+    void writeTo(PacketWriter& writer) const override;
+    static Say readFrom(PacketReader& reader);
+    // plus constructors, opcode, operator== and operator!=
+};
+```
+
+- Decoding returns a `std::unique_ptr<Packet>`; check `opcode()` and cast. It is not a `std::variant` because a direction may have no packets at all (an empty `variant` is ill-formed) and servers often queue packets before dispatching them, which a base class pointer handles better; the price is one heap allocation per packet. `decodeFromClient(data, size)` overloads take a pointer and a length directly.
+- Every error derives from `std::runtime_error`: `TruncatedPacketError` when the data ends early; `InvalidPacketError` for invalid data (a length above 2^31 - 1), with the subclasses `UnknownOpcodeError` (`opcode()` returns the value read) and `UnknownEnumValueError` for an unknown opcode or enum value; `PacketRangeError` when writing a length that does not fit its prefix. They all share the base class `PacketError`. Fixed arrays and fixed bytes are `std::array`, so the type guarantees their size and there is no "wrong number of elements" error.
+- Members are always `camelCase`. A field that clashes with a generated member (`opcode`, `bodySize`, `writeTo`), a C++ keyword, or a name that headers often define as a macro (`min`, `max`) gets an underscore appended.
+- All structs live in `Structs.hpp`: two structs may hold arrays of each other, and no include order compiles when every type has its own header. Packets and enums get one header each, and `<protocol name>Protocol.hpp` is the entry point.
+- There is no `hashCode` or `toString`, and two NaN values compare equal.
+- Type names cannot reuse names the generated code depends on, such as `Packet`, `PacketReader`, `Structs` or `NULL`.
+
 ### Wireshark
 
 `pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000` writes one self-contained `<protocol name>.lua` with no module dependencies; it needs Wireshark 3.6 or later. Captures then show packet, field and enum names, and you can filter with expressions such as `chat_room.say.text == "hi"`.
@@ -302,7 +346,7 @@ The wire format is an opcode followed by the fields in order, with no names or t
 - [x] Markdown docs generator
 - [x] C# generator (Unity and .NET servers)
 - [x] TypeScript generator (web clients and Node servers)
-- [ ] C++ generator
+- [x] C++ generator (servers and native plugins)
 - [x] Wireshark Lua dissector, so captures show field names
 - [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
 - [ ] Fuzz test data generated from the definition
@@ -311,12 +355,12 @@ The wire format is an opcode followed by the fields in order, with no names or t
 ## Development
 
 ```sh
-npm test            # unit tests, golden files, Java, C#, TypeScript round trips and Wireshark tests (Java, C# and Wireshark need javac, dotnet and tshark)
+npm test            # unit tests, golden files, Java, C#, TypeScript, C++ round trips and Wireshark tests (Java, C#, C++ and Wireshark need javac, dotnet, a C++ compiler and tshark)
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # update golden files after an intended generator change
 ```
 
-The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools. The Wireshark one builds a pcap file (Ethernet, IPv4, UDP or TCP) inside the test, runs `tshark -X lua_script:... -T fields` and checks every packet's fields and expert info; it needs `tshark` with Lua (on the PATH or in the default Windows install folder) and is skipped when missing, unless `PKTSPEC_REQUIRE_TSHARK` is set.
+The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The C++ one needs `g++`, `clang++` or MSVC's `cl` on the PATH (or named by the `CXX` environment variable); it compiles the generated headers and a test program with `-std=c++17 -Wall -Wextra -Werror -pedantic` (`/W4 /WX` for MSVC) and runs it. It is skipped when no compiler is found, unless `PKTSPEC_REQUIRE_CPP` is set. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools. The Wireshark one builds a pcap file (Ethernet, IPv4, UDP or TCP) inside the test, runs `tshark -X lua_script:... -T fields` and checks every packet's fields and expert info; it needs `tshark` with Lua (on the PATH or in the default Windows install folder) and is skipped when missing, unless `PKTSPEC_REQUIRE_TSHARK` is set.
 
 ## License
 

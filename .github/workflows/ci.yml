@@ -38,3 +38,4 @@ jobs:
         env:
           PKTSPEC_REQUIRE_JAVA: '1'
           PKTSPEC_REQUIRE_DOTNET: '1'
+          PKTSPEC_REQUIRE_CPP: '1'

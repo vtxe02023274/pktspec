@@ -16,6 +16,7 @@ export {
   type Spec,
 } from './diff.js';
 export type { GeneratedFile } from './gen/common.js';
+export { generateCpp, type CppOptions } from './gen/cpp.js';
 export { generateCSharp, type CSharpOptions } from './gen/csharp.js';
 export { generateDocs } from './gen/docs.js';
 export { generateJava, type JavaOptions } from './gen/java.js';
