@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,21 @@ describe('cli', () => {
     expect(existsSync(join(dir, 'com/example/chat/Login.java'))).toBe(true);
   });
 
+  it('generates C# into the output directory', () => {
+    const result = run('gen', 'csharp', example, '-o', dir, '--namespace', 'Example.Chat');
+    expect(result).toMatchObject({ code: 0, out: `wrote 16 files to ${dir}` });
+    expect(existsSync(join(dir, 'Login.cs'))).toBe(true);
+    expect(readFileSync(join(dir, 'Login.cs'), 'utf8')).toContain('namespace Example.Chat');
+  });
+
+  it('rejects an invalid C# namespace', () => {
+    const result = run('gen', 'csharp', example, '-o', dir, '--namespace', 'Example.new');
+    expect(result).toMatchObject({
+      code: 1,
+      err: "error: 'Example.new' is not a valid C# namespace name",
+    });
+  });
+
   it('generates docs', () => {
     expect(run('gen', 'docs', example, '--out', dir).code).toBe(0);
     expect(existsSync(join(dir, 'chat-room.md'))).toBe(true);
@@ -60,7 +75,7 @@ describe('cli', () => {
 
   it('explains usage mistakes', () => {
     expect(run('gen', 'rust', example, '-o', dir).err).toContain(
-      "unknown target 'rust'; expected one of: java, docs",
+      "unknown target 'rust'; expected one of: java, csharp, docs",
     );
     expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');

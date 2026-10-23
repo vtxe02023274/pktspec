@@ -10,6 +10,7 @@ Game servers and clients often keep their packet layouts only in code. Each side
 flowchart LR
   yaml[protocol.yaml] --> check[pktspec check]
   check --> java[Java classes]
+  check --> csharp[C# classes]
   check --> docs[Markdown docs]
 ```
 
@@ -20,16 +21,18 @@ Requires Node.js 20 or later.
 ```sh
 npx pktspec check protocol.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
+npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
 
-| Command                            | What it does                                                   |
-| ---------------------------------- | -------------------------------------------------------------- |
-| `pktspec check <file>`             | Validates a definition and reports errors with line and column |
-| `pktspec gen java <file> -o <dir>` | Generates Java classes; `--package` sets the package           |
-| `pktspec gen docs <file> -o <dir>` | Generates a Markdown field reference                           |
+| Command                              | What it does                                                   |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `pktspec check <file>`               | Validates a definition and reports errors with line and column |
+| `pktspec gen java <file> -o <dir>`   | Generates Java classes; `--package` sets the package           |
+| `pktspec gen csharp <file> -o <dir>` | Generates C# classes; `--namespace` sets the namespace         |
+| `pktspec gen docs <file> -o <dir>`   | Generates a Markdown field reference                           |
 
 Errors use the `file:line:column: error: message` format that editors can jump to:
 
@@ -77,27 +80,28 @@ packets:
 
 - Opcodes only need to be unique within one direction; `c2s` and `s2c` may reuse a number.
 - Packet, struct and enum names share one namespace and must differ by more than case, because they become file names. Declaration order does not matter. Names must start with an uppercase letter and cannot reuse a built-in type name.
-- Field names may be `snake_case` or `camelCase`; the Java generator converts them to `camelCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
-- `doc` ends up in the Javadoc and in the generated docs.
+- Field names may be `snake_case` or `camelCase`; the Java generator converts them to `camelCase` and the C# generator to `PascalCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
+- `doc` ends up in the Javadoc, in the C# XML doc comments and in the generated docs.
 
 ### Types
 
-| Type             | Syntax                         | Size (bytes)          | Java type                   |
+| Type | Syntax | Size (bytes) | Java type | C# type |
 | ---------------- | ------------------------------ | --------------------- | --------------------------- |
-| Unsigned integer | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8         | `short` `int` `long` `long` |
-| Signed integer   | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8         | `byte` `short` `int` `long` |
-| Float            | `f32` `f64`                    | 4 / 8                 | `float` `double`            |
-| Boolean          | `bool`                         | 1                     | `boolean`                   |
-| String           | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes  | `String`                    |
-| Bytes            | `bytes`, `length: u8/u16/u32`  | prefix + n            | `byte[]`                    |
-| Fixed bytes      | `bytes`, `size: 16`            | 16                    | `byte[]`                    |
-| Prefixed array   | `T[]`, `length: u8/u16/u32`    | prefix + elements     | `List<T>`                   |
-| Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   |
-| Struct           | a name from `structs`          | sum of its fields     | generated class             |
-| Enum             | a name from `enums`            | its base integer type | generated `enum`            |
+| Unsigned integer | `u8` `u16` `u32` `u64` | 1 / 2 / 4 / 8 | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong` |
+| Signed integer | `i8` `i16` `i32` `i64` | 1 / 2 / 4 / 8 | `byte` `short` `int` `long` | `sbyte` `short` `int` `long` |
+| Float | `f32` `f64` | 4 / 8 | `float` `double` | `float` `double` |
+| Boolean | `bool` | 1 | `boolean` | `bool` |
+| String | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes | `String` | `string` |
+| Bytes | `bytes`, `length: u8/u16/u32` | prefix + n | `byte[]` | `byte[]` |
+| Fixed bytes | `bytes`, `size: 16` | 16 | `byte[]` | `byte[]` |
+| Prefixed array | `T[]`, `length: u8/u16/u32` | prefix + elements | `List<T>` | `List<T>` |
+| Fixed array | `T[4]` | 4 elements | `List<T>` | `List<T>` |
+| Struct | a name from `structs` | sum of its fields | generated class | generated class |
+| Enum | a name from `enums` | its base integer type | generated `enum` | generated `enum`, members in PascalCase |
 
 - `length` defaults to `u16`. It counts bytes for strings and bytes, and elements for arrays.
 - Java has no unsigned integers, so unsigned types use the next larger type. `u64` uses `long`; values above 2^63 appear negative and can be printed with `Long.toUnsignedString`.
+- C# has native unsigned integers, so each type maps directly and integers need no range checks.
 - Enum base types can be `u8 u16 u32 i8 i16 i32`.
 - Structs may recurse through prefixed arrays (trees, for example), but cannot contain themselves directly or through a fixed array.
 - Arrays of `bytes` are not supported yet; wrap the bytes in a struct.
@@ -141,6 +145,50 @@ public final class Say implements Packet {
 
 Writing checks value ranges, string lengths and fixed array sizes, and throws `IllegalArgumentException` instead of silently truncating.
 
+### C#
+
+The C# output is written in C# 9 and compiles against .NET Standard 2.1 (Unity 2021.2 and later, and .NET servers), depending only on types in `System`. Each packet gets its own class, plus an entry point that dispatches on the opcode. The byte order is fixed by the definition:
+
+```csharp
+var say = new Say(42, "hello");
+byte[] data = say.Encode();                    // opcode + body
+
+IPacket packet = ChatRoomProtocol.DecodeFromClient(data);
+if (packet is Say received)
+{
+    Console.WriteLine(received.Text);
+}
+```
+
+```csharp
+public sealed class Say : IPacket, IEquatable<Say>
+{
+    public const int OpcodeValue = 0x0003;
+
+    public uint RoomId { get; set; }
+    public string Text { get; set; } = "";
+
+    public void WriteTo(PacketWriter writer)
+    {
+        writer.WriteU32(this.RoomId);
+        writer.WriteString(this.Text, 2);
+    }
+
+    public static Say ReadFrom(PacketReader reader)
+    {
+        Say result = new Say();
+        result.RoomId = reader.ReadU32();
+        result.Text = reader.ReadString(2);
+        return result;
+    }
+    // plus constructors, BodySize, Equals, GetHashCode and ToString
+}
+```
+
+- Members are always `PascalCase`. A field that clashes with a generated member (`Opcode`, `BodySize`, `WriteTo`), the class name or another type name gets an underscore appended.
+- Writing throws `ArgumentException` when a length does not fit its prefix or a fixed array has the wrong number of elements. Reading throws `EndOfStreamException` when the data ends early, and `InvalidDataException` for an unknown opcode or enum value.
+- `PacketReader`, `PacketWriter` and `IPacket` are generated alongside, all in the output directory with no subdirectories.
+
 The docs generator produces field tables like this one:
 
 | Field     | Type                       | Size (bytes) | Description |
@@ -154,7 +202,7 @@ The docs generator produces field tables like this one:
 - [x] Definition parser and `check`
 - [x] Java generator
 - [x] Markdown docs generator
-- [ ] C# generator (Unity and .NET servers)
+- [x] C# generator (Unity and .NET servers)
 - [ ] TypeScript generator (web clients and Node servers)
 - [ ] C++ generator
 - [ ] Wireshark Lua dissector, so captures show field names
@@ -165,12 +213,12 @@ The docs generator produces field tables like this one:
 ## Development
 
 ```sh
-npm test            # unit tests, golden files, Java round trip (when javac is available)
+npm test            # unit tests, golden files, Java and C# round trips (when javac and dotnet are available)
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # update golden files after an intended generator change
 ```
 
-The round-trip test encodes and decodes every packet with edge-case values and checks that nothing changes. It needs `javac` and `java` on the PATH.
+The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure.
 
 ## License
 

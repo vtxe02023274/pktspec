@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- `pktspec gen csharp`：C# 9、.NET Standard 2.1 的類別，Unity 與 .NET 伺服器都能用，只依賴 `System` 底下的型別；`--namespace` 指定命名空間。
+
 ## [0.2.0] - 2026-10-21
 
 第一個發布到 npm 的版本，可以用 `npx pktspec` 執行。

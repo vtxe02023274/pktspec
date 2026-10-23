@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compile, formatDiagnostic } from './compile.js';
 import type { GeneratedFile } from './gen/common.js';
+import { generateCSharp } from './gen/csharp.js';
 import { generateDocs } from './gen/docs.js';
 import { generateJava } from './gen/java.js';
 import type { Protocol } from './model.js';
@@ -19,16 +20,27 @@ const USAGE = `Usage:
 
 Targets:
   java    Java classes using java.nio.ByteBuffer
+  csharp  C# classes for .NET Standard 2.1 (Unity and .NET)
   docs    Markdown reference
 
 Options:
   -o, --out <dir>        output directory (required for gen)
       --package <name>   Java package (default: derived from the protocol name)
+      --namespace <name> C# namespace (default: derived from the protocol name)
   -h, --help             show this help
   -v, --version          show the version`;
 
-const GENERATORS: Record<string, (protocol: Protocol, javaPackage?: string) => GeneratedFile[]> = {
-  java: (protocol, javaPackage) => generateJava(protocol, { package: javaPackage }),
+interface GenerateOptions {
+  package?: string;
+  namespace?: string;
+}
+
+const GENERATORS: Record<
+  string,
+  (protocol: Protocol, options: GenerateOptions) => GeneratedFile[]
+> = {
+  java: (protocol, options) => generateJava(protocol, { package: options.package }),
+  csharp: (protocol, options) => generateCSharp(protocol, { namespace: options.namespace }),
   docs: (protocol) => generateDocs(protocol),
 };
 
@@ -47,6 +59,7 @@ export function main(argv: string[], io: Output = stdio): number {
       options: {
         out: { type: 'string', short: 'o' },
         package: { type: 'string' },
+        namespace: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -96,7 +109,7 @@ export function main(argv: string[], io: Output = stdio): number {
     if (!protocol) return 1;
     let files;
     try {
-      files = generate(protocol, values.package);
+      files = generate(protocol, { package: values.package, namespace: values.namespace });
     } catch (error) {
       io.err(`error: ${(error as Error).message}`);
       return 1;

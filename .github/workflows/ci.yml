@@ -27,6 +27,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -34,3 +37,4 @@ jobs:
       - run: npm test
         env:
           PKTSPEC_REQUIRE_JAVA: '1'
+          PKTSPEC_REQUIRE_DOTNET: '1'
