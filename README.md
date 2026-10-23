@@ -30,6 +30,7 @@ npx pktspec gen typescript protocol.yaml -o out/ts
 npx pktspec gen cpp protocol.yaml -o out/cpp --namespace Example::Chat
 npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
+npx pktspec fuzz protocol.yaml -o out/fuzz --seed 1 --count 16
 ```
 
 範例定義檔在 [examples/](examples/)，例如 `examples/chat-room.yaml`。
@@ -44,6 +45,7 @@ npx pktspec gen docs protocol.yaml -o out/docs
 | `pktspec gen cpp <file> -o <dir>`        | 產生 C++17 標頭檔，只用標準函式庫，`--namespace` 指定命名空間 |
 | `pktspec gen wireshark <file> -o <dir>`  | 產生 Wireshark Lua dissector，`--port` 指定預設連接埠         |
 | `pktspec gen docs <file> -o <dir>`       | 產生 Markdown 欄位文件                                        |
+| `pktspec fuzz <file> -o <dir>`           | 產生 fuzz 測試資料（有效與無效封包樣本加 manifest）           |
 
 錯誤訊息的格式是 `檔案:行:欄: error: 說明`，編輯器可以直接跳到該處：
 
@@ -339,6 +341,113 @@ info (2)
 - 列舉值新增算相容，但產生的程式碼遇到不認識的值會丟錯，舊版對端收到新值仍會失敗。
 - 結束碼：沒有 breaking 是 0，有 breaking 是 1，參數錯誤是 2。檔案無法讀取或沒通過 `check` 的檢查時，和 `check` 一樣回 1，錯誤印在 stderr，兩個檔案的錯誤會一起列出。
 
+## 產生 fuzz 測試資料
+
+`pktspec fuzz protocol.yaml -o out/fuzz` 依定義產生一批封包樣本，可以當 libFuzzer、AFL++ 的種子語料，或餵給自己的重放程式。每個樣本是一個 `.bin` 檔，內容是 opcode 加本體，位元組順序與 opcode 寬度和產生的程式碼一致；`manifest.json` 記錄每個檔案是什麼、預期的結果。
+
+```
+$ pktspec fuzz examples/chat-room.yaml -o out/fuzz --seed 1 --count 16
+wrote 396 samples (207 valid, 189 invalid) to out/fuzz
+
+out/fuzz/
+  manifest.json
+  valid/c2s-Login-account-max.bin
+  valid/s2c-LoginResult-status-BANNED.bin
+  valid/c2s-Login-random-01.bin
+  invalid/c2s-Login-truncated-07.bin
+  invalid/s2c-LoginResult-enum-status-bad_4.bin
+  invalid/c2s-unknown_opcode-0000.bin
+```
+
+| 選項                 | 說明                                                       |
+| -------------------- | ---------------------------------------------------------- |
+| `--seed <n>`         | 隨機樣本的種子，0 到 4294967295，預設 1                    |
+| `--count <n>`        | 每個封包的隨機有效樣本數，預設 16，0 表示不產生            |
+| `--max-size <bytes>` | 單一樣本（含 opcode）的大小上限，預設 131072；超過的不輸出 |
+| `--max-samples <n>`  | 樣本總數上限，預設不限；依下表順序保留，從最後面開始捨棄   |
+
+`manifest.json` 的 `samples` 每筆是一個樣本：
+
+```json
+{
+  "format": 1,
+  "protocol": "chat-room",
+  "version": "1",
+  "endian": "little",
+  "opcode": "u16",
+  "seed": 1,
+  "count": 16,
+  "maxSize": 131072,
+  "skipped": { "tooLarge": 0, "overLimit": 0 },
+  "samples": [
+    {
+      "file": "valid/c2s-Login-account-max.bin",
+      "packet": "Login",
+      "direction": "c2s",
+      "valid": true,
+      "error": null,
+      "kind": "boundary",
+      "size": 292
+    },
+    {
+      "file": "invalid/c2s-Login-length-account-length.bin",
+      "packet": "Login",
+      "direction": "c2s",
+      "valid": false,
+      "error": "truncated",
+      "kind": "length_past_end",
+      "size": 37
+    },
+    {
+      "file": "invalid/c2s-unknown_opcode-0000.bin",
+      "packet": null,
+      "direction": "c2s",
+      "valid": false,
+      "error": "invalid",
+      "kind": "unknown_opcode",
+      "size": 2
+    }
+  ]
+}
+```
+
+- `direction` 是該餵給哪個解碼器：`c2s` 餵 `decodeFromClient`，`s2c` 餵 `decodeFromServer`。`packet` 是樣本來自哪個封包，opcode 不屬於任何封包時是 `null`。
+- `valid` 為 `true` 的樣本，每個產生的解碼器都能解開，重新編碼會得到一模一樣的位元組。為 `false` 的樣本，解碼器一定丟出 `error` 指的錯誤：
+
+| `error`     | TypeScript、C++        | Java                       | C#                     |
+| ----------- | ---------------------- | -------------------------- | ---------------------- |
+| `truncated` | `TruncatedPacketError` | `BufferUnderflowException` | `EndOfStreamException` |
+| `invalid`   | `InvalidPacketError`   | `IllegalArgumentException` | `InvalidDataException` |
+
+樣本依 `kind` 分組，輸出與 `--max-samples` 保留的順序就是下表的順序：
+
+| `kind`             | `error`     | 內容                                                                                                           |
+| ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------- |
+| `boundary`         | 無          | 整個封包全為 0（`zero`）、全為最小值（`min`）、全為最大值（`max`）；再逐一把單一欄位換成邊界值，其他欄位維持 0 |
+| `unknown_opcode`   | `invalid`   | 每個方向最小與最大的未使用 opcode，以及只存在於另一個方向的 opcode，只有 opcode 沒有本體                       |
+| `unknown_enum`     | `invalid`   | 列舉欄位（含巢狀在結構與陣列裡的）換成沒有成員使用的最大與最小值                                               |
+| `length_past_end`  | `truncated` | 字串、`bytes`、陣列的長度前綴改成「剩下的位元組數加 1」                                                        |
+| `length_too_large` | `invalid`   | `u32` 長度前綴改成 `0xFFFFFFFF`，超過 2^31 - 1                                                                 |
+| `truncated`        | `truncated` | 把 `max` 樣本在每個位元組邊界截斷（長度 0 到全長減 1）；超過 1024 位元組時只截前 512 與後 512 個長度           |
+| `random`           | 無          | 每個封包 `--count` 個隨機有效樣本                                                                              |
+
+`boundary` 的邊界值包括：
+
+- 整數的最小值、最大值、0、1，有號數的 -1，無號數的最高位元。
+- `f32`、`f64` 的 -0、1.5、NaN、正負無限大、最大有限值、最低有限值、最小非正規數；`bool` 的 true。
+- 字串與 `bytes` 的空值、短值、多位元組 UTF-8，以及長度前綴允許的最大長度；固定長度 `bytes` 的全 `0xFF` 與固定圖樣。
+- 每一個列舉值。
+- 陣列的空、一個元素、最大長度與元素邊界值（`elem-` 開頭）；固定長度陣列的第一個元素邊界值（`first-` 開頭）；巢狀結構逐層往下，遞迴結構到第 3 層為止。
+- 長度前綴允許的最大長度放不進 `--max-size` 時，改填到放得下的最長長度，檔名用 `fill` 取代 `max`。
+
+說明：
+
+- 檔名是 `<方向>-<封包>-<情況>.bin`，只用字母、數字、`_`、`.`、`-`，不分大小寫也不會重複。位元組完全相同的樣本只留第一個，所以隨機樣本可能少於 `--count`。
+- 隨機數用內建的 mulberry32，不用 `Math.random`。每個封包有自己的亂數序列（由種子、方向與封包名稱決定），所以同樣的定義、種子與選項在任何平台都產生相同位元組，新增封包也不會改動其他封包的隨機樣本。NaN 一律是標準 NaN。
+- 沒有「尾端多餘位元組」的無效樣本：各語言的解碼器都只讀一個封包，後面的位元組原樣留著，不視為錯誤。同樣地，`bool` 的非 0 值一律當 true、不合法的 UTF-8 不報錯，所以也不產生。
+- 輸出目錄裡已有 `manifest.json` 時，會先刪掉舊的 `valid/`、`invalid/` 再寫入，避免新舊樣本混在一起。
+- 超過 `--max-size` 的樣本不輸出，數量記在 `skipped.tooLarge`；被 `--max-samples` 捨棄的記在 `skipped.overLimit`，兩者也會在 stderr 提示。
+
 ## 路線圖
 
 - [x] 定義檔解析與 `check`
@@ -349,7 +458,7 @@ info (2)
 - [x] C++ 產生器（伺服器與原生外掛）
 - [x] Wireshark Lua dissector：抓封包時直接看到欄位名稱
 - [x] `pktspec diff old.yaml new.yaml`：列出兩個版本的差異與相容性問題
-- [ ] 依定義自動產生 fuzz 測試資料
+- [x] `pktspec fuzz`：依定義自動產生 fuzz 測試資料
 - [ ] 條件欄位（某欄位的值決定後面要不要讀）與位元欄位
 
 ## 開發
@@ -360,7 +469,7 @@ npm run lint        # ESLint + Prettier
 npx vitest run -u   # 有意修改產生器輸出時，更新 golden file
 ```
 
-往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。C++ 的需要 `g++`、`clang++` 或 MSVC 的 `cl` 在 PATH 裡（也可用 `CXX` 環境變數指定），以 `-std=c++17 -Wall -Wextra -Werror -pedantic`（MSVC 是 `/W4 /WX`）編譯產生的標頭與測試程式再執行，找不到編譯器就略過，設定 `PKTSPEC_REQUIRE_CPP` 則改為失敗。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。Wireshark 的測試會在測試裡組出 pcap 檔（Ethernet、IPv4、UDP 或 TCP），用 `tshark -X lua_script:... -T fields` 讀回每個封包的欄位與專家資訊；需要 `tshark`（含 Lua，在 PATH 或 Windows 預設安裝位置），找不到就略過，設定 `PKTSPEC_REQUIRE_TSHARK` 則改為失敗。
+往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。C++ 的需要 `g++`、`clang++` 或 MSVC 的 `cl` 在 PATH 裡（也可用 `CXX` 環境變數指定），以 `-std=c++17 -Wall -Wextra -Werror -pedantic`（MSVC 是 `/W4 /WX`）編譯產生的標頭與測試程式再執行，找不到編譯器就略過，設定 `PKTSPEC_REQUIRE_CPP` 則改為失敗。fuzz 的測試會把產生的語料餵給 TypeScript、Java、C#、C++ 的解碼器（同樣的略過與 `PKTSPEC_REQUIRE_*` 規則）：有效樣本要能解開且重新編碼後位元組不變，無效樣本要丟出 manifest 標的錯誤。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。Wireshark 的測試會在測試裡組出 pcap 檔（Ethernet、IPv4、UDP 或 TCP），用 `tshark -X lua_script:... -T fields` 讀回每個封包的欄位與專家資訊；需要 `tshark`（含 Lua，在 PATH 或 Windows 預設安裝位置），找不到就略過，設定 `PKTSPEC_REQUIRE_TSHARK` 則改為失敗。
 
 ## 授權
 

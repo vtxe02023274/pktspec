@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -195,6 +195,53 @@ describe('cli', () => {
     expect(run('diff', oldSpec, newSpec, '--format', 'xml').err).toContain(
       "unknown format 'xml'; expected text or json",
     );
+  });
+
+  it('writes a fuzz corpus and its manifest', () => {
+    const result = run('fuzz', example, '-o', dir, '--seed', '5', '--count', '2');
+    expect(result.code).toBe(0);
+    expect(result.out).toMatch(/^wrote \d+ samples \(\d+ valid, \d+ invalid\) to /);
+    expect(result.out.endsWith(dir)).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({ format: 1, protocol: 'chat-room', seed: 5, count: 2 });
+    for (const sample of manifest.samples) {
+      expect(readFileSync(join(dir, sample.file)).length).toBe(sample.size);
+    }
+    expect(manifest.samples).toContainEqual({
+      file: 'valid/c2s-Say-zero.bin',
+      packet: 'Say',
+      direction: 'c2s',
+      valid: true,
+      error: null,
+      kind: 'boundary',
+      size: 8,
+    });
+  });
+
+  it('replaces the samples of an earlier fuzz run', () => {
+    run('fuzz', example, '-o', dir, '--count', '4');
+    run('fuzz', example, '-o', dir, '--count', '0', '--max-samples', '10');
+    const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+    expect(manifest.samples).toHaveLength(10);
+    expect(readdirSync(join(dir, 'valid')).length).toBe(10);
+    expect(existsSync(join(dir, 'invalid'))).toBe(false);
+  });
+
+  it('explains fuzz usage mistakes', () => {
+    expect(run('fuzz', example).err).toContain('fuzz requires --out <dir>');
+    expect(run('fuzz', '-o', dir).code).toBe(2);
+    for (const [option, value] of [
+      ['--seed', '4294967296'],
+      ['--seed', '-1'],
+      ['--count', 'many'],
+      ['--max-size', '0'],
+      ['--max-samples', '0'],
+    ] as const) {
+      const result = run('fuzz', example, '-o', dir, `${option}=${value}`);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain(`'${value}' is not a valid ${option}`);
+    }
+    expect(run('fuzz', join(dir, 'missing.yaml'), '-o', dir).code).toBe(1);
   });
 
   it('explains usage mistakes', () => {

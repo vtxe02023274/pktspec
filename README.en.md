@@ -30,6 +30,7 @@ npx pktspec gen typescript protocol.yaml -o out/ts
 npx pktspec gen cpp protocol.yaml -o out/cpp --namespace Example::Chat
 npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
+npx pktspec fuzz protocol.yaml -o out/fuzz --seed 1 --count 16
 ```
 
 Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
@@ -44,6 +45,7 @@ Example definitions are in [examples/](examples/), such as `examples/chat-room.y
 | `pktspec gen cpp <file> -o <dir>`        | Generates C++17 headers using only the standard library; `--namespace` sets the namespace |
 | `pktspec gen wireshark <file> -o <dir>`  | Generates a Wireshark Lua dissector; `--port` sets the default port                       |
 | `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                                                      |
+| `pktspec fuzz <file> -o <dir>`           | Generates fuzz test data (valid and invalid packet samples plus a manifest)               |
 
 Errors use the `file:line:column: error: message` format that editors can jump to:
 
@@ -339,6 +341,113 @@ The wire format is an opcode followed by the fields in order, with no names or t
 - A new enum value counts as compatible, but the generated code throws on values it does not know, so an older peer that receives the new value still fails.
 - Exit codes: 0 when nothing is breaking, 1 when anything is, 2 for usage errors. Like `check`, an unreadable file or one that fails validation exits 1 with the errors on stderr; errors from both files are listed together.
 
+## Fuzz test data
+
+`pktspec fuzz protocol.yaml -o out/fuzz` writes a corpus of packet samples from the definition. Use it as the seed corpus for libFuzzer or AFL++, or feed it to your own replay harness. Each sample is one `.bin` file holding the opcode followed by the body, in the byte order and opcode width of the generated code; `manifest.json` says what each file is and what a decoder should do with it.
+
+```
+$ pktspec fuzz examples/chat-room.yaml -o out/fuzz --seed 1 --count 16
+wrote 396 samples (207 valid, 189 invalid) to out/fuzz
+
+out/fuzz/
+  manifest.json
+  valid/c2s-Login-account-max.bin
+  valid/s2c-LoginResult-status-BANNED.bin
+  valid/c2s-Login-random-01.bin
+  invalid/c2s-Login-truncated-07.bin
+  invalid/s2c-LoginResult-enum-status-bad_4.bin
+  invalid/c2s-unknown_opcode-0000.bin
+```
+
+| Option               | Description                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| `--seed <n>`         | Seed of the random samples, 0 to 4294967295 (default 1)                                                  |
+| `--count <n>`        | Random valid samples per packet (default 16, 0 for none)                                                 |
+| `--max-size <bytes>` | Largest sample including the opcode (default 131072); larger ones are not written                        |
+| `--max-samples <n>`  | Total number of samples (default: no limit); kept in the order of the table below, dropping from the end |
+
+Each entry of `samples` in `manifest.json` describes one file:
+
+```json
+{
+  "format": 1,
+  "protocol": "chat-room",
+  "version": "1",
+  "endian": "little",
+  "opcode": "u16",
+  "seed": 1,
+  "count": 16,
+  "maxSize": 131072,
+  "skipped": { "tooLarge": 0, "overLimit": 0 },
+  "samples": [
+    {
+      "file": "valid/c2s-Login-account-max.bin",
+      "packet": "Login",
+      "direction": "c2s",
+      "valid": true,
+      "error": null,
+      "kind": "boundary",
+      "size": 292
+    },
+    {
+      "file": "invalid/c2s-Login-length-account-length.bin",
+      "packet": "Login",
+      "direction": "c2s",
+      "valid": false,
+      "error": "truncated",
+      "kind": "length_past_end",
+      "size": 37
+    },
+    {
+      "file": "invalid/c2s-unknown_opcode-0000.bin",
+      "packet": null,
+      "direction": "c2s",
+      "valid": false,
+      "error": "invalid",
+      "kind": "unknown_opcode",
+      "size": 2
+    }
+  ]
+}
+```
+
+- `direction` names the decoder to feed: `c2s` for `decodeFromClient`, `s2c` for `decodeFromServer`. `packet` is the packet the sample was built from, or `null` when the opcode belongs to no packet.
+- Every generated decoder decodes a sample with `valid: true`, and encoding the result gives back exactly the same bytes. A sample with `valid: false` always makes the decoder throw the error named by `error`:
+
+| `error`     | TypeScript, C++        | Java                       | C#                     |
+| ----------- | ---------------------- | -------------------------- | ---------------------- |
+| `truncated` | `TruncatedPacketError` | `BufferUnderflowException` | `EndOfStreamException` |
+| `invalid`   | `InvalidPacketError`   | `IllegalArgumentException` | `InvalidDataException` |
+
+Samples are grouped by `kind`, and the table is also the order in which they are written and kept by `--max-samples`:
+
+| `kind`             | `error`     | Content                                                                                                                                                                                      |
+| ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `boundary`         | none        | Whole packets with every field at zero (`zero`), at its lowest values (`min`) and at its highest values (`max`); then one field at a time set to a boundary value while the others stay zero |
+| `unknown_opcode`   | `invalid`   | In each direction the lowest and highest unused opcode, and opcodes that exist only in the other direction; opcode only, no body                                                             |
+| `unknown_enum`     | `invalid`   | Enum fields (also inside structs and arrays) set to the highest and the lowest value that no member uses                                                                                     |
+| `length_past_end`  | `truncated` | The length prefix of a string, `bytes` or array set to the number of remaining bytes plus one                                                                                                |
+| `length_too_large` | `invalid`   | A `u32` length prefix set to `0xFFFFFFFF`, above 2^31 - 1                                                                                                                                    |
+| `truncated`        | `truncated` | The `max` sample cut at every byte boundary (lengths 0 up to the full length minus one); above 1024 bytes only the first and last 512 lengths                                                |
+| `random`           | none        | `--count` random valid samples per packet                                                                                                                                                    |
+
+The boundary values for `boundary` are:
+
+- For integers: the minimum, the maximum, 0 and 1, -1 for signed types and the top bit for unsigned types.
+- For `f32` and `f64`: -0, 1.5, NaN, positive and negative infinity, the largest and the lowest finite value and the smallest subnormal; for `bool`: true.
+- For strings and `bytes`: empty, short, multi-byte UTF-8 and the longest length the prefix allows; for fixed-size `bytes`: all `0xFF` and a fixed pattern.
+- Every enum value.
+- For arrays: empty, one element, the longest count and element boundary values (names start with `elem-`); for fixed-size arrays: boundary values of the first element (`first-`); nested structs level by level, down to the third level for recursive ones.
+- When the longest length a prefix allows does not fit in `--max-size`, the value is filled up to the longest length that fits and the file name says `fill` instead of `max`.
+
+Notes:
+
+- File names are `<direction>-<packet>-<case>.bin` using only letters, digits, `_`, `.` and `-`, and stay unique on case-insensitive file systems. Samples with identical bytes are written once, so there can be fewer random samples than `--count`.
+- Random numbers come from a built-in mulberry32 generator, not `Math.random`. Each packet has its own stream (derived from the seed, the direction and the packet name), so the same definition, seed and options give the same bytes on every platform, and adding a packet does not change the random samples of the others. NaN is always the standard NaN.
+- There are no samples with trailing bytes: every generated decoder reads one packet and leaves later bytes unread without treating them as an error. For the same reason there are none for a `bool` other than 0 or 1 (any non-zero value is true) or for invalid UTF-8 (not an error).
+- If the output directory already holds a `manifest.json`, the old `valid/` and `invalid/` folders are removed first so that samples of two runs never mix.
+- Samples over `--max-size` are not written and counted in `skipped.tooLarge`; those dropped by `--max-samples` are counted in `skipped.overLimit`. Both are also reported on stderr.
+
 ## Roadmap
 
 - [x] Definition parser and `check`
@@ -349,7 +458,7 @@ The wire format is an opcode followed by the fields in order, with no names or t
 - [x] C++ generator (servers and native plugins)
 - [x] Wireshark Lua dissector, so captures show field names
 - [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
-- [ ] Fuzz test data generated from the definition
+- [x] `pktspec fuzz`: fuzz test data generated from the definition
 - [ ] Conditional fields (a value decides whether later fields are present) and bit fields
 
 ## Development
@@ -360,7 +469,7 @@ npm run lint        # ESLint + Prettier
 npx vitest run -u   # update golden files after an intended generator change
 ```
 
-The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The C++ one needs `g++`, `clang++` or MSVC's `cl` on the PATH (or named by the `CXX` environment variable); it compiles the generated headers and a test program with `-std=c++17 -Wall -Wextra -Werror -pedantic` (`/W4 /WX` for MSVC) and runs it. It is skipped when no compiler is found, unless `PKTSPEC_REQUIRE_CPP` is set. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools. The Wireshark one builds a pcap file (Ethernet, IPv4, UDP or TCP) inside the test, runs `tshark -X lua_script:... -T fields` and checks every packet's fields and expert info; it needs `tshark` with Lua (on the PATH or in the default Windows install folder) and is skipped when missing, unless `PKTSPEC_REQUIRE_TSHARK` is set.
+The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The C++ one needs `g++`, `clang++` or MSVC's `cl` on the PATH (or named by the `CXX` environment variable); it compiles the generated headers and a test program with `-std=c++17 -Wall -Wextra -Werror -pedantic` (`/W4 /WX` for MSVC) and runs it. It is skipped when no compiler is found, unless `PKTSPEC_REQUIRE_CPP` is set. The fuzz tests feed the generated corpus to the TypeScript, Java, C# and C++ decoders (same skip and `PKTSPEC_REQUIRE_*` rules): valid samples must decode and encode back to the same bytes, invalid ones must throw the error the manifest names. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools. The Wireshark one builds a pcap file (Ethernet, IPv4, UDP or TCP) inside the test, runs `tshark -X lua_script:... -T fields` and checks every packet's fields and expert info; it needs `tshark` with Lua (on the PATH or in the default Windows install folder) and is skipped when missing, unless `PKTSPEC_REQUIRE_TSHARK` is set.
 
 ## License
 

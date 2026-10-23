@@ -15,6 +15,17 @@ export {
   type Severity,
   type Spec,
 } from './diff.js';
+export {
+  FUZZ_DEFAULTS,
+  generateFuzz,
+  type FuzzCorpus,
+  type FuzzError,
+  type FuzzKind,
+  type FuzzManifest,
+  type FuzzManifestSample,
+  type FuzzOptions,
+  type FuzzSample,
+} from './fuzz.js';
 export type { GeneratedFile } from './gen/common.js';
 export { generateCpp, type CppOptions } from './gen/cpp.js';
 export { generateCSharp, type CSharpOptions } from './gen/csharp.js';

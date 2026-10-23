@@ -41,6 +41,14 @@
 - 專家資訊：截斷、未知 opcode、未知列舉值、長度超出、巢狀過深（64 層）、尾端多餘資料、方向不明。
 - 測試：golden file（`test/golden/wireshark/`）、`test/wireshark.test.ts`、`test/roundtrip-wireshark.test.ts`（測試內組 pcap，跑 `tshark -T fields` 比對欄位與專家資訊）；沒有含 Lua 的 `tshark` 時略過，`PKTSPEC_REQUIRE_TSHARK` 設定時改為失敗。CI 還沒裝 Wireshark，所以那邊略過。
 
+- `pktspec fuzz <file> -o <dir>`：`--seed`、`--count`、`--max-size`、`--max-samples`；輸出 `valid/`、`invalid/`、`manifest.json`（格式見 README）。實作在 `src/fuzz.ts`，不依賴任何產生器，直接依 `model.ts` 的線上格式組位元組。
+- 有效樣本：整包 zero／min／max，再逐一欄位換邊界值（其他欄位為 0）；隨機樣本用自己的 mulberry32，每個封包獨立亂數序列（種子加方向加封包名），位元組相同的樣本去重。
+- 無效樣本與標的錯誤只有兩類，各語言對得起來：`truncated`（截斷、長度前綴超出剩餘位元組）對 `TruncatedPacketError`／`BufferUnderflowException`／`EndOfStreamException`，`invalid`（未知 opcode、未知列舉值、`u32` 長度超過 2^31 - 1）對 `InvalidPacketError`／`IllegalArgumentException`／`InvalidDataException`。
+- 不產生尾端多餘位元組、`bool` 非 0/1、不合法 UTF-8：四個解碼器都不拒絕，標了就是錯的。
+- 遞迴結構在第 3 層停止；固定長度陣列只換第一個元素；陣列長度前綴的最大值放不進 `--max-size` 時改填到放得下為止（檔名 `fill`）；元素大小為 0 的陣列（`Empty[]`）最多 1024 個，也不產生 `length_past_end`（解碼不會到達尾端）。
+- 輸出目錄已有 `manifest.json` 時先刪舊的 `valid/`、`invalid/`。
+- 測試：`test/fuzz.test.ts`（決定性、邊界位元組、無效標籤、上限選項）、`test/roundtrip-fuzz.test.ts`（TypeScript、Java、C#、C++ 解碼器吃整份語料：有效的解開且重新編碼位元組不變，無效的丟出標的錯誤；Java、C#、C++ 的略過與 `PKTSPEC_REQUIRE_*` 規則同往返測試）、`test/cli.test.ts`。Wireshark 沒有跑語料。
+
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
@@ -54,4 +62,4 @@
 
 ## 下一步
 
-照 README 路線圖，下一版做 fuzz 測試資料或條件欄位與位元欄位。`diff` 已完成，條件欄位進來後要補規則（目前格式沒有選填欄位）。
+照 README 路線圖，下一版做條件欄位與位元欄位。條件欄位進來後 fuzz 也要補：要涵蓋條件成立與不成立的兩種排列。`diff` 已完成，條件欄位進來後要補規則（目前格式沒有選填欄位）。
