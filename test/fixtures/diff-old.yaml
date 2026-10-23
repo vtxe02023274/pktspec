@@ -1,0 +1,34 @@
+name: arena
+version: 1
+
+enums:
+  Team:
+    type: u8
+    values:
+      RED: 0
+      BLUE: 1
+
+structs:
+  Vec2:
+    fields:
+      - { name: x, type: i16 }
+      - { name: y, type: i16 }
+
+packets:
+  - name: Join
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: player_id, type: u32 }
+      - { name: team, type: Team }
+
+  - name: Move
+    opcode: 2
+    direction: c2s
+    fields:
+      - { name: pos, type: Vec2 }
+
+  - name: Ping
+    opcode: 3
+    direction: c2s
+    fields: []

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { compile, formatDiagnostic } from './compile.js';
+import { diffProtocols, diffReport, formatDiff, type Spec } from './diff.js';
 import type { GeneratedFile } from './gen/common.js';
 import { generateCSharp } from './gen/csharp.js';
 import { generateDocs } from './gen/docs.js';
@@ -17,6 +18,7 @@ export interface Output {
 
 const USAGE = `Usage:
   pktspec check <protocol.yaml>
+  pktspec diff <old.yaml> <new.yaml> [--format text|json]
   pktspec gen <target> <protocol.yaml> -o <dir> [options]
 
 Targets:
@@ -29,6 +31,7 @@ Options:
   -o, --out <dir>        output directory (required for gen)
       --package <name>   Java package (default: derived from the protocol name)
       --namespace <name> C# namespace (default: derived from the protocol name)
+      --format <format>  diff output: text (default) or json
   -h, --help             show this help
   -v, --version          show the version`;
 
@@ -63,6 +66,7 @@ export function main(argv: string[], io: Output = stdio): number {
         out: { type: 'string', short: 'o' },
         package: { type: 'string' },
         namespace: { type: 'string' },
+        format: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -93,6 +97,25 @@ export function main(argv: string[], io: Output = stdio): number {
     ];
     io.out(`${rest[0]}: ok (${counts.join(', ')})`);
     return 0;
+  }
+
+  if (command === 'diff') {
+    if (rest.length !== 2) return usageError(io, 'diff takes an old and a new protocol file');
+    const format = values.format ?? 'text';
+    if (format !== 'text' && format !== 'json') {
+      return usageError(io, `unknown format '${format}'; expected text or json`);
+    }
+    // Both files are loaded before returning so that every error is reported at once.
+    const before = loadSpec(rest[0]!, io);
+    const after = loadSpec(rest[1]!, io);
+    if (!before || !after) return 1;
+    const changes = diffProtocols(before, after);
+    if (format === 'json') {
+      io.out(JSON.stringify(diffReport(rest[0]!, rest[1]!, changes), null, 2));
+    } else {
+      for (const line of formatDiff(rest[0]!, rest[1]!, changes)) io.out(line);
+    }
+    return changes.some((change) => change.severity === 'breaking') ? 1 : 0;
   }
 
   if (command === 'gen') {
@@ -130,6 +153,10 @@ export function main(argv: string[], io: Output = stdio): number {
 }
 
 function load(file: string, io: Output): Protocol | undefined {
+  return loadSpec(file, io)?.protocol;
+}
+
+function loadSpec(file: string, io: Output): Spec | undefined {
   let source;
   try {
     source = readFileSync(file, 'utf8');
@@ -137,9 +164,9 @@ function load(file: string, io: Output): Protocol | undefined {
     io.err(`error: cannot read ${file}: ${(error as NodeJS.ErrnoException).code ?? error}`);
     return undefined;
   }
-  const { protocol, diagnostics } = compile(source);
+  const { protocol, locations, diagnostics } = compile(source);
   for (const diagnostic of diagnostics) io.err(formatDiagnostic(file, diagnostic));
-  return protocol;
+  return protocol && locations ? { protocol, locations } : undefined;
 }
 
 function usageError(io: Output, message: string): number {

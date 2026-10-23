@@ -21,6 +21,7 @@ Requires Node.js 20 or later.
 
 ```sh
 npx pktspec check protocol.yaml
+npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
@@ -32,6 +33,7 @@ Example definitions are in [examples/](examples/), such as `examples/chat-room.y
 | Command                                  | What it does                                                   |
 | ---------------------------------------- | -------------------------------------------------------------- |
 | `pktspec check <file>`                   | Validates a definition and reports errors with line and column |
+| `pktspec diff <old> <new>`               | Compares two versions and lists wire compatibility changes     |
 | `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package           |
 | `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace         |
 | `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js          |
@@ -245,6 +247,39 @@ The docs generator produces field tables like this one:
 | `kind`    | [RoomKind](#roomkind)      | 1            |             |
 | `members` | [User](#user)[] (u8 count) | 1 + variable |             |
 
+## Comparing versions
+
+`pktspec diff old.yaml new.yaml` compares two definitions and lists the differences grouped by severity. Line numbers come from the new file, with the old file's position in parentheses; `--format json` prints a machine-readable report.
+
+```
+$ pktspec diff v1.yaml v2.yaml
+breaking (2)
+  v2.yaml:15:17: struct 'Vec2' field 'x': type changed from i16 to i32 (used by: Move) (was v1.yaml:14:17)
+  v1.yaml:31:11: packet 'Ping' (0x03, c2s) removed
+
+compatible (2)
+  v2.yaml:10:7: enum 'Team' value 'GREEN' (2) added
+  v2.yaml:32:11: packet 'Chat' (0x04, c2s) added
+
+info (2)
+  v2.yaml:1:1: version changed from '1' to '2' (was v1.yaml:1:1)
+  v2.yaml:23:17: packet 'Join' field 'id': renamed from 'player_id' (was v1.yaml:22:17)
+
+2 breaking, 2 compatible, 2 info
+```
+
+The wire format is an opcode followed by the fields in order, with no names or tags, so the rules look at how the bytes are laid out:
+
+| Severity   | Changes                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| breaking   | Endianness or opcode width; a packet removed or its opcode or direction changed; a field added or removed (the bytes after it shift); a field's type, size, length prefix, fixed length or array element type; a reorder that changes the layout; an enum's underlying type, a value removed or renumbered; the same changes inside a struct (with the packets that carry it) |
+| compatible | A new packet with a new opcode, a new enum value, a new struct or enum                                                                                                                                                                                                                                                                                                        |
+| info       | Protocol rename, `version` or `doc` changes; a field, packet or enum value renamed with the same position and type; a type renamed with the same layout; a reorder that leaves the layout unchanged                                                                                                                                                                           |
+
+- A breaking change to a struct or enum that no packet uses is reported as info.
+- A new enum value counts as compatible, but the generated code throws on values it does not know, so an older peer that receives the new value still fails.
+- Exit codes: 0 when nothing is breaking, 1 when anything is, 2 for usage errors. Like `check`, an unreadable file or one that fails validation exits 1 with the errors on stderr; errors from both files are listed together.
+
 ## Roadmap
 
 - [x] Definition parser and `check`
@@ -254,7 +289,7 @@ The docs generator produces field tables like this one:
 - [x] TypeScript generator (web clients and Node servers)
 - [ ] C++ generator
 - [ ] Wireshark Lua dissector, so captures show field names
-- [ ] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
+- [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
 - [ ] Fuzz test data generated from the definition
 - [ ] Conditional fields (a value decides whether later fields are present) and bit fields
 

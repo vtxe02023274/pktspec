@@ -22,13 +22,19 @@
 - 型別名稱和 `Packet`、`Index`、`Uint8Array`、`Error` 這類產生的程式會用到的名稱衝突（不分大小寫）直接報錯。
 - 測試：golden file（`test/golden/typescript/`）、TypeScript 往返測試（用專案的 `tsc` 以嚴格選項編進暫存目錄，含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`verbatimModuleSyntax`、`erasableSyntaxOnly`，再用 Node 執行，逐一編碼再解碼，比對已知位元組，另驗證範圍、截斷與錯誤輸入）；不需要額外工具，所以沒有略過條件。
 
+- `pktspec diff old.yaml new.yaml`：比對兩份定義，依 breaking／compatible／info 分組，`--format json` 給程式讀；兩個檔案都先過 `check` 的檢查，錯誤一起列出。`compile` 多回傳 `locations`（宣告位置），`src/diff.ts` 用它標行號。
+- diff 規則依線上格式（opcode 加依序欄位，無名稱）：欄位新增、移除、型別或長度前綴改變、列舉底層型別改變、值移除或改號一律 breaking；改名、doc、version 是 info；新封包、新列舉值是 compatible。結構、列舉的變更列出經過的封包，沒有封包用到時降為 info。
+- 結束碼：有 breaking 回 1、參數錯誤回 2；檔案無法讀取或沒通過檢查時和 `check` 一致回 1（和 breaking 同碼，要靠 stderr 區分）。
+- 測試：`test/diff.test.ts` 每條規則一組小定義檔，`test/cli.test.ts` 驗文字、JSON 輸出與結束碼，範例在 `test/fixtures/diff-old.yaml`、`diff-new.yaml`。
+
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
 - 字串陣列的元素一律用 u16 長度前綴。
 - 結構只能透過長度前綴陣列遞迴。
 - TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
+- `diff` 不偵測結構、列舉改名（視為移除加新增）；欄位改名只認同位置、同型別的情況；列舉值新增算相容，但產生的程式遇到未知值會丟錯。
 
 ## 下一步
 
-照 README 路線圖，下一版先做 C++ 產生器。
+照 README 路線圖，下一版先做 C++ 產生器。`diff` 已完成，條件欄位進來後要補規則（目前格式沒有選填欄位）。

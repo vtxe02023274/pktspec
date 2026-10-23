@@ -6,6 +6,7 @@
 
 ### 新增
 
+- `pktspec diff old.yaml new.yaml`：比對兩份定義，依 breaking、compatible、info 分組列出差異，附新舊檔行號與經過的封包；`--format json` 輸出給程式讀；有 breaking 時結束碼為 1。
 - `pktspec gen csharp`：C# 9、.NET Standard 2.1 的類別，Unity 與 .NET 伺服器都能用，只依賴 `System` 底下的型別；`--namespace` 指定命名空間。
 - `pktspec gen typescript`：不依賴任何套件的 TypeScript 類別，瀏覽器與 Node.js 18 以上都能用；`u64`、`i64` 用 `bigint`，列舉用 `const` 物件加聯集型別，import 帶 `.js` 副檔名。
 

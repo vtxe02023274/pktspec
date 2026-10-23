@@ -25,9 +25,23 @@ export interface Diagnostic {
   message: string;
 }
 
+export interface SourcePosition {
+  line: number;
+  column: number;
+}
+
+/**
+ * Where each declaration sits in the source, keyed like `packet:Say`, `packet:Say/field:text`,
+ * `struct:User/field:id`, `enum:RoomKind/value:PUBLIC`; the protocol header keys are `protocol`,
+ * `protocol:endian` and `protocol:opcode`. Packets also have `/opcode` and `/direction`.
+ */
+export type Locations = Map<string, SourcePosition>;
+
 export interface CompileResult {
   /** Present only when there are no diagnostics. */
   protocol?: Protocol;
+  /** Present together with `protocol`. */
+  locations?: Locations;
   diagnostics: Diagnostic[];
 }
 
@@ -66,7 +80,9 @@ export function compile(source: string): CompileResult {
   const compiler = new Compiler(lines);
   const protocol = compiler.protocol(document.contents);
   const diagnostics = compiler.diagnostics.sort((a, b) => a.line - b.line || a.column - b.column);
-  return diagnostics.length > 0 ? { diagnostics } : { protocol, diagnostics };
+  return diagnostics.length > 0
+    ? { diagnostics }
+    : { protocol, locations: compiler.locations, diagnostics };
 }
 
 export function formatDiagnostic(file: string, diagnostic: Diagnostic): string {
@@ -75,6 +91,7 @@ export function formatDiagnostic(file: string, diagnostic: Diagnostic): string {
 
 class Compiler {
   readonly diagnostics: Diagnostic[] = [];
+  readonly locations: Locations = new Map();
   private readonly declared = new Map<string, { kind: string; node: Node }>();
   private readonly enumNames = new Set<string>();
   private readonly structNodes = new Map<string, Node>();
@@ -94,6 +111,11 @@ class Compiler {
     ]);
     if (!root || !entries) return undefined;
 
+    this.locations.set('protocol', this.position(root));
+    for (const key of ['endian', 'opcode']) {
+      const entry = entries.get(key);
+      if (entry) this.locations.set(`protocol:${key}`, this.position(entry.value ?? entry.key));
+    }
     const nameEntry = this.require(entries, 'name', root, 'protocol');
     const name = nameEntry && this.string(nameEntry, "'name'");
     if (nameEntry && name !== undefined && !PROTOCOL_NAME.test(name)) {
@@ -186,6 +208,8 @@ class Compiler {
     if (!entries) return undefined;
     const typeEntry = this.require(entries, 'type', owner, `enum '${name}'`);
     const type = typeEntry && this.oneOf(typeEntry, `type of enum '${name}'`, ENUM_TYPES);
+    this.locations.set(`enum:${name}`, this.position(entry.key));
+    if (typeEntry) this.locations.set(`enum:${name}/type`, this.position(typeEntry.value));
     const doc = this.optionalString(entries.get('doc'), "'doc'");
     const valuesEntry = this.require(entries, 'values', owner, `enum '${name}'`);
     if (!valuesEntry) return undefined;
@@ -215,6 +239,7 @@ class Compiler {
         this.error(item.value, `value ${value} is already used by '${name}.${duplicate}'`);
       }
       seen.set(value, valueName);
+      this.locations.set(`enum:${name}/value:${valueName}`, this.position(item.key));
       values.push({ name: valueName, value });
     }
     return type ? { name, type, doc, values } : undefined;
@@ -225,7 +250,8 @@ class Compiler {
     const entries = this.entries(owner, `struct '${name}'`, ['doc', 'fields']);
     const doc = this.optionalString(entries?.get('doc'), "'doc'");
     const fieldsEntry = entries && this.require(entries, 'fields', owner, `struct '${name}'`);
-    const fields = fieldsEntry ? this.fields(fieldsEntry) : [];
+    const fields = fieldsEntry ? this.fields(fieldsEntry, `struct:${name}`) : [];
+    this.locations.set(`struct:${name}`, this.position(entry.key));
     return { name, doc, fields };
   }
 
@@ -285,7 +311,13 @@ class Compiler {
 
       const doc = this.optionalString(entries.get('doc'), "'doc'");
       const fieldsEntry = entries.get('fields');
-      const fields = fieldsEntry ? this.fields(fieldsEntry) : [];
+      const fields = fieldsEntry ? this.fields(fieldsEntry, `packet:${name}`) : [];
+      if (name !== undefined) {
+        const base = `packet:${name}`;
+        this.locations.set(base, this.position(nameEntry?.value ?? item));
+        this.locations.set(`${base}/opcode`, this.position(opcodeEntry?.value ?? item));
+        this.locations.set(`${base}/direction`, this.position(directionEntry?.value ?? item));
+      }
       if (declared && name !== undefined && opcode !== undefined && direction) {
         packets.push({ name, opcode, direction, doc, fields });
       }
@@ -293,7 +325,7 @@ class Compiler {
     return packets;
   }
 
-  private fields(entry: Entry): Field[] {
+  private fields(entry: Entry, owner: string): Field[] {
     if (!isSeq(entry.value)) {
       this.error(entry.value ?? entry.key, "'fields' must be a list");
       return [];
@@ -315,6 +347,7 @@ class Compiler {
         );
       }
       seen.set(normalized, field.field.name);
+      this.locations.set(`${owner}/field:${field.field.name}`, this.position(field.nameNode));
       fields.push(field.field);
     }
     return fields;
@@ -515,6 +548,11 @@ class Compiler {
   private error(node: Node | null | undefined, message: string): void {
     const { line, col } = this.lines.linePos(node?.range?.[0] ?? 0);
     this.diagnostics.push({ line, column: col, message });
+  }
+
+  private position(node: Node | null | undefined): SourcePosition {
+    const { line, col } = this.lines.linePos(node?.range?.[0] ?? 0);
+    return { line, column: col };
   }
 
   private line(node: Node): number {

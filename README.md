@@ -21,6 +21,7 @@ flowchart LR
 
 ```sh
 npx pktspec check protocol.yaml
+npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
@@ -32,6 +33,7 @@ npx pktspec gen docs protocol.yaml -o out/docs
 | 指令                                     | 作用                                          |
 | ---------------------------------------- | --------------------------------------------- |
 | `pktspec check <file>`                   | 檢查定義檔，錯誤會標出行號與欄位              |
+| `pktspec diff <old> <new>`               | 比對兩個版本，列出線上格式的相容性差異        |
 | `pktspec gen java <file> -o <dir>`       | 產生 Java 類別，`--package` 指定套件名稱      |
 | `pktspec gen csharp <file> -o <dir>`     | 產生 C# 類別，`--namespace` 指定命名空間      |
 | `pktspec gen typescript <file> -o <dir>` | 產生 TypeScript 類別，瀏覽器與 Node.js 都能用 |
@@ -245,6 +247,39 @@ export class Say implements Packet {
 | `kind`    | [RoomKind](#roomkind)      | 1            |             |
 | `members` | [User](#user)[] (u8 count) | 1 + variable |             |
 
+## 比對兩個版本
+
+`pktspec diff old.yaml new.yaml` 比對兩份定義，依嚴重程度分組列出差異。行號以新檔為主，舊檔的位置寫在括號裡；加上 `--format json` 輸出給程式讀。
+
+```
+$ pktspec diff v1.yaml v2.yaml
+breaking (2)
+  v2.yaml:15:17: struct 'Vec2' field 'x': type changed from i16 to i32 (used by: Move) (was v1.yaml:14:17)
+  v1.yaml:31:11: packet 'Ping' (0x03, c2s) removed
+
+compatible (2)
+  v2.yaml:10:7: enum 'Team' value 'GREEN' (2) added
+  v2.yaml:32:11: packet 'Chat' (0x04, c2s) added
+
+info (2)
+  v2.yaml:1:1: version changed from '1' to '2' (was v1.yaml:1:1)
+  v2.yaml:23:17: packet 'Join' field 'id': renamed from 'player_id' (was v1.yaml:22:17)
+
+2 breaking, 2 compatible, 2 info
+```
+
+線上格式只有 opcode 加上依序排列的欄位，沒有欄位名稱或標記，所以規則看的是位元組怎麼排：
+
+| 嚴重程度   | 變更                                                                                                                                                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| breaking   | 位元組順序或 opcode 寬度改變；封包移除、opcode 或方向改變；欄位新增、移除（後面的位元組會位移）；欄位型別、大小、長度前綴、固定長度、陣列元素型別改變；欄位順序改變且排列不同；列舉底層型別改變、列舉值移除或改號；結構的上述變更（列出經過哪些封包） |
+| compatible | 新封包（新 opcode）、新列舉值、新結構或列舉                                                                                                                                                                                                           |
+| info       | 協定改名、`version`、`doc` 變更；欄位、封包、列舉值改名（位置與型別不變）；型別改名但位元組排列相同；欄位順序改變但排列相同                                                                                                                           |
+
+- 沒有任何封包用到的結構或列舉，breaking 變更降為 info。
+- 列舉值新增算相容，但產生的程式碼遇到不認識的值會丟錯，舊版對端收到新值仍會失敗。
+- 結束碼：沒有 breaking 是 0，有 breaking 是 1，參數錯誤是 2。檔案無法讀取或沒通過 `check` 的檢查時，和 `check` 一樣回 1，錯誤印在 stderr，兩個檔案的錯誤會一起列出。
+
 ## 路線圖
 
 - [x] 定義檔解析與 `check`
@@ -254,7 +289,7 @@ export class Say implements Packet {
 - [x] TypeScript 產生器（網頁客戶端與 Node 伺服器）
 - [ ] C++ 產生器
 - [ ] Wireshark Lua dissector：抓封包時直接看到欄位名稱
-- [ ] `pktspec diff old.yaml new.yaml`：列出兩個版本的差異與相容性問題
+- [x] `pktspec diff old.yaml new.yaml`：列出兩個版本的差異與相容性問題
 - [ ] 依定義自動產生 fuzz 測試資料
 - [ ] 條件欄位（某欄位的值決定後面要不要讀）與位元欄位
 

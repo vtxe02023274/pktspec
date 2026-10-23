@@ -1,0 +1,36 @@
+name: arena
+version: 2
+
+enums:
+  Team:
+    type: u8
+    values:
+      RED: 0
+      BLUE: 1
+      GREEN: 2
+
+structs:
+  Vec2:
+    fields:
+      - { name: x, type: i32 }
+      - { name: y, type: i16 }
+
+packets:
+  - name: Join
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: id, type: u32 }
+      - { name: team, type: Team }
+
+  - name: Move
+    opcode: 2
+    direction: c2s
+    fields:
+      - { name: pos, type: Vec2 }
+
+  - name: Chat
+    opcode: 4
+    direction: c2s
+    fields:
+      - { name: text, type: string }
