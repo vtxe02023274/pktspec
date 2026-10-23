@@ -7,6 +7,7 @@ import type { GeneratedFile } from './gen/common.js';
 import { generateCSharp } from './gen/csharp.js';
 import { generateDocs } from './gen/docs.js';
 import { generateJava } from './gen/java.js';
+import { generateTypeScript } from './gen/typescript.js';
 import type { Protocol } from './model.js';
 
 export interface Output {
@@ -19,9 +20,10 @@ const USAGE = `Usage:
   pktspec gen <target> <protocol.yaml> -o <dir> [options]
 
 Targets:
-  java    Java classes using java.nio.ByteBuffer
-  csharp  C# classes for .NET Standard 2.1 (Unity and .NET)
-  docs    Markdown reference
+  java        Java classes using java.nio.ByteBuffer
+  csharp      C# classes for .NET Standard 2.1 (Unity and .NET)
+  typescript  TypeScript classes for browsers and Node.js
+  docs        Markdown reference
 
 Options:
   -o, --out <dir>        output directory (required for gen)
@@ -41,6 +43,7 @@ const GENERATORS: Record<
 > = {
   java: (protocol, options) => generateJava(protocol, { package: options.package }),
   csharp: (protocol, options) => generateCSharp(protocol, { namespace: options.namespace }),
+  typescript: (protocol) => generateTypeScript(protocol),
   docs: (protocol) => generateDocs(protocol),
 };
 

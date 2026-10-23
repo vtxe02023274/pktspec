@@ -11,6 +11,7 @@ flowchart LR
   yaml[protocol.yaml] --> check[pktspec check]
   check --> java[Java classes]
   check --> csharp[C# classes]
+  check --> ts[TypeScript classes]
   check --> docs[Markdown docs]
 ```
 
@@ -22,17 +23,19 @@ Requires Node.js 20 or later.
 npx pktspec check protocol.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
+npx pktspec gen typescript protocol.yaml -o out/ts
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
 
-| Command                              | What it does                                                   |
-| ------------------------------------ | -------------------------------------------------------------- |
-| `pktspec check <file>`               | Validates a definition and reports errors with line and column |
-| `pktspec gen java <file> -o <dir>`   | Generates Java classes; `--package` sets the package           |
-| `pktspec gen csharp <file> -o <dir>` | Generates C# classes; `--namespace` sets the namespace         |
-| `pktspec gen docs <file> -o <dir>`   | Generates a Markdown field reference                           |
+| Command                                  | What it does                                                   |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| `pktspec check <file>`                   | Validates a definition and reports errors with line and column |
+| `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package           |
+| `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace         |
+| `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js          |
+| `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                           |
 
 Errors use the `file:line:column: error: message` format that editors can jump to:
 
@@ -80,28 +83,29 @@ packets:
 
 - Opcodes only need to be unique within one direction; `c2s` and `s2c` may reuse a number.
 - Packet, struct and enum names share one namespace and must differ by more than case, because they become file names. Declaration order does not matter. Names must start with an uppercase letter and cannot reuse a built-in type name.
-- Field names may be `snake_case` or `camelCase`; the Java generator converts them to `camelCase` and the C# generator to `PascalCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
-- `doc` ends up in the Javadoc, in the C# XML doc comments and in the generated docs.
+- Field names may be `snake_case` or `camelCase`; the Java and TypeScript generators convert them to `camelCase` and the C# generator to `PascalCase`. Underscores are dropped, so a leading underscore must be followed by a letter (`_1st` is rejected).
+- `doc` ends up in the Javadoc, in the C# XML doc comments, in the TypeScript JSDoc and in the generated docs.
 
 ### Types
 
-| Type | Syntax | Size (bytes) | Java type | C# type |
-| ---------------- | ------------------------------ | --------------------- | --------------------------- |
-| Unsigned integer | `u8` `u16` `u32` `u64` | 1 / 2 / 4 / 8 | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong` |
-| Signed integer | `i8` `i16` `i32` `i64` | 1 / 2 / 4 / 8 | `byte` `short` `int` `long` | `sbyte` `short` `int` `long` |
-| Float | `f32` `f64` | 4 / 8 | `float` `double` | `float` `double` |
-| Boolean | `bool` | 1 | `boolean` | `bool` |
-| String | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes | `String` | `string` |
-| Bytes | `bytes`, `length: u8/u16/u32` | prefix + n | `byte[]` | `byte[]` |
-| Fixed bytes | `bytes`, `size: 16` | 16 | `byte[]` | `byte[]` |
-| Prefixed array | `T[]`, `length: u8/u16/u32` | prefix + elements | `List<T>` | `List<T>` |
-| Fixed array | `T[4]` | 4 elements | `List<T>` | `List<T>` |
-| Struct | a name from `structs` | sum of its fields | generated class | generated class |
-| Enum | a name from `enums` | its base integer type | generated `enum` | generated `enum`, members in PascalCase |
+| Type             | Syntax                         | Size (bytes)          | Java type                   | C# type                                 | TypeScript type                                         |
+| ---------------- | ------------------------------ | --------------------- | --------------------------- | --------------------------------------- | ------------------------------------------------------- |
+| Unsigned integer | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8         | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`          | `number` `number` `number` `bigint`                     |
+| Signed integer   | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8         | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`            | `number` `number` `number` `bigint`                     |
+| Float            | `f32` `f64`                    | 4 / 8                 | `float` `double`            | `float` `double`                        | `number`                                                |
+| Boolean          | `bool`                         | 1                     | `boolean`                   | `bool`                                  | `boolean`                                               |
+| String           | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes  | `String`                    | `string`                                | `string`                                                |
+| Bytes            | `bytes`, `length: u8/u16/u32`  | prefix + n            | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            |
+| Fixed bytes      | `bytes`, `size: 16`            | 16                    | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            |
+| Prefixed array   | `T[]`, `length: u8/u16/u32`    | prefix + elements     | `List<T>`                   | `List<T>`                               | `T[]`                                                   |
+| Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   | `List<T>`                               | `T[]`                                                   |
+| Struct           | a name from `structs`          | sum of its fields     | generated class             | generated class                         | generated class                                         |
+| Enum             | a name from `enums`            | its base integer type | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase |
 
 - `length` defaults to `u16`. It counts bytes for strings and bytes, and elements for arrays.
 - Java has no unsigned integers, so unsigned types use the next larger type. `u64` uses `long`; values above 2^63 appear negative and can be printed with `Long.toUnsignedString`.
 - C# has native unsigned integers, so each type maps directly and integers need no range checks.
+- TypeScript uses `bigint` for `u64` and `i64` and `number` for every other numeric type; writing checks the range and rejects fractions.
 - Enum base types can be `u8 u16 u32 i8 i16 i32`.
 - Structs may recurse through prefixed arrays (trees, for example), but cannot contain themselves directly or through a fixed array.
 - Arrays of `bytes` are not supported yet; wrap the bytes in a struct.
@@ -189,6 +193,50 @@ public sealed class Say : IPacket, IEquatable<Say>
 - Writing throws `ArgumentException` when a length does not fit its prefix or a fixed array has the wrong number of elements. Reading throws `EndOfStreamException` when the data ends early, and `InvalidDataException` for an unknown opcode or enum value.
 - `PacketReader`, `PacketWriter` and `IPacket` are generated alongside, all in the output directory with no subdirectories.
 
+### TypeScript
+
+The TypeScript output has no dependencies. It only uses `DataView`, `Uint8Array`, `TextEncoder` and `TextDecoder`, so it runs in browsers and on Node.js 18 and later. It needs a compile target of ES2020 or later (for `bigint`) and `TextEncoder` types (a `lib` that includes `DOM`, or `@types/node`). Each type gets its own `.ts` file, and every import carries a `.js` extension so Node's ESM and bundlers both work. It avoids `enum`, namespaces and constructor parameter properties, so it also compiles under `erasableSyntaxOnly` and `isolatedModules`:
+
+```ts
+import { ChatRoomProtocol, Say } from './out/ts/index.js';
+
+const say = new Say(42, 'hello');
+const data = say.encode(); // opcode + body, a Uint8Array
+
+const packet = ChatRoomProtocol.decodeFromClient(data);
+if (packet instanceof Say) {
+  console.log(packet.text);
+}
+```
+
+```ts
+export class Say implements Packet {
+  static readonly OPCODE = 0x0003;
+
+  roomId: number;
+  text: string;
+
+  writeTo(writer: PacketWriter): void {
+    writer.writeU32(this.roomId);
+    writer.writeString(this.text, 2);
+  }
+
+  static readFrom(reader: PacketReader): Say {
+    const result = new Say();
+    result.roomId = reader.readU32();
+    result.text = reader.readString(2);
+    return result;
+  }
+  // plus a constructor, bodySize, encode, equals and toString
+}
+```
+
+- Members are always `camelCase`. A field that clashes with a generated member (`opcode`, `bodySize`, `writeTo`) or an `Object` member gets an underscore appended. A field named like a reserved word (such as `class`) keeps its property name; only the constructor parameter gets the underscore.
+- An enum is a `const` object plus a union type of the same name, for example `LoginStatus.BadPassword`, with members in PascalCase.
+- Writing throws `RangeError` when a number is out of range or fractional, a length does not fit its prefix, or a fixed array has the wrong number of elements. Reading throws `TruncatedPacketError` when the data ends early, and `InvalidPacketError` for an unknown opcode or enum value or a length above 2^31 - 1.
+- There is no `hashCode`, and a `f32` or `f64` NaN is always written as the canonical NaN rather than keeping its original bits.
+- Type names cannot reuse names the generated code depends on, such as `Packet`, `Index`, `Uint8Array` or `Error`.
+
 The docs generator produces field tables like this one:
 
 | Field     | Type                       | Size (bytes) | Description |
@@ -203,7 +251,7 @@ The docs generator produces field tables like this one:
 - [x] Java generator
 - [x] Markdown docs generator
 - [x] C# generator (Unity and .NET servers)
-- [ ] TypeScript generator (web clients and Node servers)
+- [x] TypeScript generator (web clients and Node servers)
 - [ ] C++ generator
 - [ ] Wireshark Lua dissector, so captures show field names
 - [ ] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
@@ -213,12 +261,12 @@ The docs generator produces field tables like this one:
 ## Development
 
 ```sh
-npm test            # unit tests, golden files, Java and C# round trips (when javac and dotnet are available)
+npm test            # unit tests, golden files, Java, C# and TypeScript round trips (Java and C# need javac and dotnet)
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # update golden files after an intended generator change
 ```
 
-The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure.
+The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools.
 
 ## License
 

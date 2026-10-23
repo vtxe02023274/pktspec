@@ -15,13 +15,20 @@
 - 與 Java 的差異：欄位用 PascalCase 屬性；整數用原生無號型別，不做範圍檢查；列舉成員改 PascalCase 並保證不重名；讀取失敗拋 `EndOfStreamException`、`InvalidDataException`，寫入失敗拋 `ArgumentException`。
 - 欄位名稱和產生的成員、類別名稱、其他型別名稱衝突時，在後面補底線。型別名稱和 System 型別或產生的型別衝突則直接報錯。
 - 測試：golden file（`test/golden/csharp/`）、C# 往返測試（用 `dotnet build -warnaserror` 編進 netstandard2.1 函式庫與可執行檔，逐一編碼再解碼，比對已知位元組，另驗證截斷與錯誤輸入的例外）；沒有 `dotnet` 時略過，`PKTSPEC_REQUIRE_DOTNET` 設定時改為失敗。
+- TypeScript 產生器：`pktspec gen typescript`，沒有額外選項；只用 `DataView`、`Uint8Array`、`TextEncoder`、`TextDecoder`，瀏覽器與 Node 18 以上都能跑，編譯目標要 ES2020（`bigint`）。
+- 每個型別一個 `.ts` 檔，另產生 `Packet`、`PacketReader`、`PacketWriter`、`PacketErrors`、`<Name>Codec`、`<Name>Protocol` 與 `index.ts`；檔案不分子目錄，import 一律帶 `.js`。
+- 與 Java、C# 的差異：`u64`、`i64` 用 `bigint`，其餘整數用 `number`，寫入時檢查範圍並拒絕小數；列舉是 `const` 物件加聯集型別（不用 `enum`，開 `erasableSyntaxOnly` 也能編）；欄位用 camelCase，保留字欄位只在建構子參數加底線；`<Name>Protocol` 是物件常數；沒有 `hashCode`，只有 `equals`（浮點數用 `Object.is`）與 `toString`。
+- 錯誤：寫入失敗丟 `RangeError`，資料不足丟 `TruncatedPacketError`，opcode、列舉值未知或長度超過 2^31 - 1 丟 `InvalidPacketError`。字串長度自己算 UTF-8 位元組數，孤立代理字元寫成 U+FFFD；解碼不吃掉開頭的 BOM。
+- 型別名稱和 `Packet`、`Index`、`Uint8Array`、`Error` 這類產生的程式會用到的名稱衝突（不分大小寫）直接報錯。
+- 測試：golden file（`test/golden/typescript/`）、TypeScript 往返測試（用專案的 `tsc` 以嚴格選項編進暫存目錄，含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`verbatimModuleSyntax`、`erasableSyntaxOnly`，再用 Node 執行，逐一編碼再解碼，比對已知位元組，另驗證範圍、截斷與錯誤輸入）；不需要額外工具，所以沒有略過條件。
 
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
 - 字串陣列的元素一律用 u16 長度前綴。
 - 結構只能透過長度前綴陣列遞迴。
+- TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
 
 ## 下一步
 
-照 README 路線圖，下一版先做 TypeScript 產生器。
+照 README 路線圖，下一版先做 C++ 產生器。

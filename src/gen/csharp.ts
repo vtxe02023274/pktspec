@@ -12,7 +12,7 @@ import {
   type Protocol,
   type Struct,
 } from '../model.js';
-import { hex, pascalCase, type GeneratedFile } from './common.js';
+import { enumMemberName, hex, pascalCase, uniqueName, type GeneratedFile } from './common.js';
 
 export interface CSharpOptions {
   /** C# namespace of the generated types; derived from the protocol name when omitted. */
@@ -1056,30 +1056,6 @@ ${indentLines(additions)}        return hash.ToHashCode();
 /** Indents method body lines; each line ends with a newline so an empty body stays empty. */
 function indentLines(lines: string[]): string {
   return lines.map((line) => `${INDENT}${INDENT}${line}\n`).join('');
-}
-
-function uniqueName(
-  base: string,
-  used: Set<string>,
-  rejected: (name: string) => boolean = () => false,
-): string {
-  let name = base;
-  while (used.has(name) || rejected(name)) name += '_';
-  used.add(name);
-  return name;
-}
-
-function enumMemberName(name: string): string {
-  const parts = name.split('_').filter((part) => part !== '');
-  const keepCase = /[a-z]/.test(name);
-  const joined = parts
-    .map((part) => {
-      const text = keepCase ? part : part.toLowerCase();
-      return text.charAt(0).toUpperCase() + text.slice(1);
-    })
-    .join('');
-  if (joined === '') return '_';
-  return /^[0-9]/.test(joined) ? `_${joined}` : joined;
 }
 
 function xmlDoc(text: string | undefined, indent: string, tag = 'summary'): string {

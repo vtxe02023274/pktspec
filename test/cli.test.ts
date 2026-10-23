@@ -52,6 +52,13 @@ describe('cli', () => {
     expect(readFileSync(join(dir, 'Login.cs'), 'utf8')).toContain('namespace Example.Chat');
   });
 
+  it('generates TypeScript into the output directory', () => {
+    const result = run('gen', 'typescript', example, '-o', dir);
+    expect(result).toMatchObject({ code: 0, out: `wrote 18 files to ${dir}` });
+    expect(existsSync(join(dir, 'Login.ts'))).toBe(true);
+    expect(readFileSync(join(dir, 'index.ts'), 'utf8')).toContain("export * from './Login.js';");
+  });
+
   it('rejects an invalid C# namespace', () => {
     const result = run('gen', 'csharp', example, '-o', dir, '--namespace', 'Example.new');
     expect(result).toMatchObject({
@@ -75,7 +82,7 @@ describe('cli', () => {
 
   it('explains usage mistakes', () => {
     expect(run('gen', 'rust', example, '-o', dir).err).toContain(
-      "unknown target 'rust'; expected one of: java, csharp, docs",
+      "unknown target 'rust'; expected one of: java, csharp, typescript, docs",
     );
     expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');
