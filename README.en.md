@@ -12,6 +12,7 @@ flowchart LR
   check --> java[Java classes]
   check --> csharp[C# classes]
   check --> ts[TypeScript classes]
+  check --> lua[Wireshark dissector]
   check --> docs[Markdown docs]
 ```
 
@@ -25,19 +26,21 @@ npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
+npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 Example definitions are in [examples/](examples/), such as `examples/chat-room.yaml`.
 
-| Command                                  | What it does                                                   |
-| ---------------------------------------- | -------------------------------------------------------------- |
-| `pktspec check <file>`                   | Validates a definition and reports errors with line and column |
-| `pktspec diff <old> <new>`               | Compares two versions and lists wire compatibility changes     |
-| `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package           |
-| `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace         |
-| `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js          |
-| `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                           |
+| Command                                  | What it does                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| `pktspec check <file>`                   | Validates a definition and reports errors with line and column      |
+| `pktspec diff <old> <new>`               | Compares two versions and lists wire compatibility changes          |
+| `pktspec gen java <file> -o <dir>`       | Generates Java classes; `--package` sets the package                |
+| `pktspec gen csharp <file> -o <dir>`     | Generates C# classes; `--namespace` sets the namespace              |
+| `pktspec gen typescript <file> -o <dir>` | Generates TypeScript classes for browsers and Node.js               |
+| `pktspec gen wireshark <file> -o <dir>`  | Generates a Wireshark Lua dissector; `--port` sets the default port |
+| `pktspec gen docs <file> -o <dir>`       | Generates a Markdown field reference                                |
 
 Errors use the `file:line:column: error: message` format that editors can jump to:
 
@@ -239,6 +242,18 @@ export class Say implements Packet {
 - There is no `hashCode`, and a `f32` or `f64` NaN is always written as the canonical NaN rather than keeping its original bits.
 - Type names cannot reuse names the generated code depends on, such as `Packet`, `Index`, `Uint8Array` or `Error`.
 
+### Wireshark
+
+`pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000` writes one self-contained `<protocol name>.lua` with no module dependencies; it needs Wireshark 3.6 or later. Captures then show packet, field and enum names, and you can filter with expressions such as `chat_room.say.text == "hi"`.
+
+Install it by copying the file to the personal plugins folder (Help > About Wireshark > Folders > Personal Lua Plugins) and restarting Wireshark, or skip installing and run `tshark -X lua_script:chat-room.lua -r capture.pcap`.
+
+- On the wire a message is just the opcode and the body, with no length prefix, so there is no TCP reassembly: every UDP datagram or TCP segment is read as one message, and bytes after it are flagged as a note. A message split across segments shows up as truncated.
+- Ports: `--port` is the default of three preferences, TCP port, UDP port and server port; without it they are 0 and nothing is registered. Set a port under Edit > Preferences > Protocols > the protocol name, or use Analyze > Decode As (`tshark -d udp.port==7000,chat_room`).
+- Direction: traffic to the server port is `c2s` and traffic from it is `s2c`; when the server port is unset the TCP and UDP ports are used. If neither side matches and the opcode exists in both directions, both are tried and the one with fewer problems wins; a tie is read as `c2s` with a note.
+- Field names are `protocol.packet.field` in lowercase with underscores, for example `chat_room.say.room_id`; struct fields use `protocol.struct.field`, array elements add `.item`, and `protocol.packet`, `protocol.direction` and `protocol.opcode` are always there.
+- Expert info: truncated data, unknown opcode, unknown enum value, a length or count past the end of the packet, structs nested over 64 levels, data after the packet, and an unknown direction.
+
 The docs generator produces field tables like this one:
 
 | Field     | Type                       | Size (bytes) | Description |
@@ -288,7 +303,7 @@ The wire format is an opcode followed by the fields in order, with no names or t
 - [x] C# generator (Unity and .NET servers)
 - [x] TypeScript generator (web clients and Node servers)
 - [ ] C++ generator
-- [ ] Wireshark Lua dissector, so captures show field names
+- [x] Wireshark Lua dissector, so captures show field names
 - [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
 - [ ] Fuzz test data generated from the definition
 - [ ] Conditional fields (a value decides whether later fields are present) and bit fields
@@ -296,12 +311,12 @@ The wire format is an opcode followed by the fields in order, with no names or t
 ## Development
 
 ```sh
-npm test            # unit tests, golden files, Java, C# and TypeScript round trips (Java and C# need javac and dotnet)
+npm test            # unit tests, golden files, Java, C#, TypeScript round trips and Wireshark tests (Java, C# and Wireshark need javac, dotnet and tshark)
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # update golden files after an intended generator change
 ```
 
-The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools.
+The round-trip tests encode and decode every packet with edge-case values and check that nothing changes. The Java one needs `javac` and `java` on the PATH; the C# one needs the .NET SDK 8 or later (`dotnet`). Either is skipped when its tools are missing, unless `PKTSPEC_REQUIRE_JAVA` or `PKTSPEC_REQUIRE_DOTNET` is set, which makes the missing tool a failure. The TypeScript one compiles the generated code with the project's own `tsc` in strict mode (including `noUncheckedIndexedAccess`, `noUnusedLocals` and `erasableSyntaxOnly`) and runs it on Node.js, so it needs no extra tools. The Wireshark one builds a pcap file (Ethernet, IPv4, UDP or TCP) inside the test, runs `tshark -X lua_script:... -T fields` and checks every packet's fields and expert info; it needs `tshark` with Lua (on the PATH or in the default Windows install folder) and is skipped when missing, unless `PKTSPEC_REQUIRE_TSHARK` is set.
 
 ## License
 

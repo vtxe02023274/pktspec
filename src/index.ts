@@ -20,4 +20,5 @@ export { generateCSharp, type CSharpOptions } from './gen/csharp.js';
 export { generateDocs } from './gen/docs.js';
 export { generateJava, type JavaOptions } from './gen/java.js';
 export { generateTypeScript } from './gen/typescript.js';
+export { generateWireshark, type WiresharkOptions } from './gen/wireshark.js';
 export type * from './model.js';

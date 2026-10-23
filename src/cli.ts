@@ -9,6 +9,7 @@ import { generateCSharp } from './gen/csharp.js';
 import { generateDocs } from './gen/docs.js';
 import { generateJava } from './gen/java.js';
 import { generateTypeScript } from './gen/typescript.js';
+import { generateWireshark } from './gen/wireshark.js';
 import type { Protocol } from './model.js';
 
 export interface Output {
@@ -25,12 +26,14 @@ Targets:
   java        Java classes using java.nio.ByteBuffer
   csharp      C# classes for .NET Standard 2.1 (Unity and .NET)
   typescript  TypeScript classes for browsers and Node.js
+  wireshark   Wireshark Lua dissector
   docs        Markdown reference
 
 Options:
   -o, --out <dir>        output directory (required for gen)
       --package <name>   Java package (default: derived from the protocol name)
       --namespace <name> C# namespace (default: derived from the protocol name)
+      --port <number>    wireshark: default TCP, UDP and server port (default: none)
       --format <format>  diff output: text (default) or json
   -h, --help             show this help
   -v, --version          show the version`;
@@ -38,6 +41,7 @@ Options:
 interface GenerateOptions {
   package?: string;
   namespace?: string;
+  port?: number;
 }
 
 const GENERATORS: Record<
@@ -47,6 +51,7 @@ const GENERATORS: Record<
   java: (protocol, options) => generateJava(protocol, { package: options.package }),
   csharp: (protocol, options) => generateCSharp(protocol, { namespace: options.namespace }),
   typescript: (protocol) => generateTypeScript(protocol),
+  wireshark: (protocol, options) => generateWireshark(protocol, { port: options.port }),
   docs: (protocol) => generateDocs(protocol),
 };
 
@@ -66,6 +71,7 @@ export function main(argv: string[], io: Output = stdio): number {
         out: { type: 'string', short: 'o' },
         package: { type: 'string' },
         namespace: { type: 'string' },
+        port: { type: 'string' },
         format: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
@@ -131,11 +137,18 @@ export function main(argv: string[], io: Output = stdio): number {
       );
     }
     if (!values.out) return usageError(io, 'gen requires --out <dir>');
+    let port: number | undefined;
+    if (values.port !== undefined) {
+      port = /^[0-9]+$/.test(values.port) ? Number(values.port) : NaN;
+      if (!(port >= 1 && port <= 65535)) {
+        return usageError(io, `'${values.port}' is not a valid port; expected 1 to 65535`);
+      }
+    }
     const protocol = load(file, io);
     if (!protocol) return 1;
     let files;
     try {
-      files = generate(protocol, { package: values.package, namespace: values.namespace });
+      files = generate(protocol, { package: values.package, namespace: values.namespace, port });
     } catch (error) {
       io.err(`error: ${(error as Error).message}`);
       return 1;

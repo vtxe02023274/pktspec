@@ -12,6 +12,7 @@ flowchart LR
   check --> java[Java 類別]
   check --> csharp[C# 類別]
   check --> ts[TypeScript 類別]
+  check --> lua[Wireshark dissector]
   check --> docs[Markdown 文件]
 ```
 
@@ -25,19 +26,21 @@ npx pktspec diff old.yaml new.yaml
 npx pktspec gen java protocol.yaml -o out/java --package com.example.chat
 npx pktspec gen csharp protocol.yaml -o out/csharp --namespace Example.Chat
 npx pktspec gen typescript protocol.yaml -o out/ts
+npx pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000
 npx pktspec gen docs protocol.yaml -o out/docs
 ```
 
 範例定義檔在 [examples/](examples/)，例如 `examples/chat-room.yaml`。
 
-| 指令                                     | 作用                                          |
-| ---------------------------------------- | --------------------------------------------- |
-| `pktspec check <file>`                   | 檢查定義檔，錯誤會標出行號與欄位              |
-| `pktspec diff <old> <new>`               | 比對兩個版本，列出線上格式的相容性差異        |
-| `pktspec gen java <file> -o <dir>`       | 產生 Java 類別，`--package` 指定套件名稱      |
-| `pktspec gen csharp <file> -o <dir>`     | 產生 C# 類別，`--namespace` 指定命名空間      |
-| `pktspec gen typescript <file> -o <dir>` | 產生 TypeScript 類別，瀏覽器與 Node.js 都能用 |
-| `pktspec gen docs <file> -o <dir>`       | 產生 Markdown 欄位文件                        |
+| 指令                                     | 作用                                                  |
+| ---------------------------------------- | ----------------------------------------------------- |
+| `pktspec check <file>`                   | 檢查定義檔，錯誤會標出行號與欄位                      |
+| `pktspec diff <old> <new>`               | 比對兩個版本，列出線上格式的相容性差異                |
+| `pktspec gen java <file> -o <dir>`       | 產生 Java 類別，`--package` 指定套件名稱              |
+| `pktspec gen csharp <file> -o <dir>`     | 產生 C# 類別，`--namespace` 指定命名空間              |
+| `pktspec gen typescript <file> -o <dir>` | 產生 TypeScript 類別，瀏覽器與 Node.js 都能用         |
+| `pktspec gen wireshark <file> -o <dir>`  | 產生 Wireshark Lua dissector，`--port` 指定預設連接埠 |
+| `pktspec gen docs <file> -o <dir>`       | 產生 Markdown 欄位文件                                |
 
 錯誤訊息的格式是 `檔案:行:欄: error: 說明`，編輯器可以直接跳到該處：
 
@@ -239,6 +242,18 @@ export class Say implements Packet {
 - 沒有 `hashCode`；`f32`、`f64` 的 NaN 一律寫成標準 NaN，不保留原本的位元內容。
 - 型別名稱不能和 `Packet`、`Index`、`Uint8Array`、`Error` 這類產生的程式會用到的名稱衝突。
 
+### Wireshark
+
+`pktspec gen wireshark protocol.yaml -o out/wireshark --port 7000` 產生一個獨立的 `<協定名稱>.lua`，不依賴其他模組，需要 Wireshark 3.6 以上。抓封包時可以直接看到封包名稱、欄位名稱和列舉名稱，也能用 `chat_room.say.text == "hi"` 這類條件過濾。
+
+安裝：把檔案複製到個人外掛資料夾（Wireshark 的「說明 > 關於 Wireshark > 資料夾」裡的 Personal Lua Plugins），重開 Wireshark；也可以不安裝，直接用 `tshark -X lua_script:chat-room.lua -r capture.pcap`。
+
+- 封包在線上只有 opcode 加內容，沒有長度前綴，所以不做 TCP 重組：每個 UDP 封包或 TCP 區段都當成一則訊息，後面多出來的位元組會標成提示。訊息跨區段時會被標成截斷。
+- 連接埠：`--port` 是 TCP、UDP、伺服器連接埠三個偏好設定的預設值，沒給就是 0（不註冊）。到「編輯 > 偏好設定 > Protocols > 協定名稱」填 TCP 或 UDP 連接埠，或用「分析 > Decode As」，`tshark` 可用 `-d udp.port==7000,chat_room`。
+- 方向：到伺服器連接埠的封包視為 `c2s`，從伺服器連接埠出來的視為 `s2c`；伺服器連接埠沒填時採用 TCP、UDP 連接埠。兩邊都對不上時，opcode 在兩個方向都有定義的話會各試解一次，挑問題較少的，平手就當 `c2s` 並加上提示。
+- 欄位名稱是 `協定.封包.欄位`（轉成小寫底線），例如 `chat_room.say.room_id`；結構的欄位用 `協定.結構.欄位`，陣列元素加 `.item`，另有 `協定.packet`、`協定.direction`、`協定.opcode`。
+- 專家資訊：資料被截斷、opcode 未知、列舉值未知、長度或元素數超出封包、結構巢狀超過 64 層、封包後有多餘資料、方向無法判斷。
+
 文件產生器輸出的欄位表：
 
 | Field     | Type                       | Size (bytes) | Description |
@@ -288,7 +303,7 @@ info (2)
 - [x] C# 產生器（Unity 與 .NET 伺服器）
 - [x] TypeScript 產生器（網頁客戶端與 Node 伺服器）
 - [ ] C++ 產生器
-- [ ] Wireshark Lua dissector：抓封包時直接看到欄位名稱
+- [x] Wireshark Lua dissector：抓封包時直接看到欄位名稱
 - [x] `pktspec diff old.yaml new.yaml`：列出兩個版本的差異與相容性問題
 - [ ] 依定義自動產生 fuzz 測試資料
 - [ ] 條件欄位（某欄位的值決定後面要不要讀）與位元欄位
@@ -296,12 +311,12 @@ info (2)
 ## 開發
 
 ```sh
-npm test            # 單元測試、golden file、Java、C# 與 TypeScript 往返測試（Java、C# 要有 javac、dotnet）
+npm test            # 單元測試、golden file、Java、C#、TypeScript 往返測試與 Wireshark 測試（Java、C#、Wireshark 要有 javac、dotnet、tshark）
 npm run lint        # ESLint + Prettier
 npx vitest run -u   # 有意修改產生器輸出時，更新 golden file
 ```
 
-往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。
+往返測試會把每個封包用極端值編碼再解碼，確認結果一致。Java 的需要 PATH 裡有 `javac` 和 `java`，C# 的需要 .NET SDK 8 以上（`dotnet`）；找不到就略過，設定環境變數 `PKTSPEC_REQUIRE_JAVA`、`PKTSPEC_REQUIRE_DOTNET` 則會改成直接失敗。TypeScript 的用專案裡的 `tsc` 以嚴格模式（含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`erasableSyntaxOnly`）編譯產生的程式碼，再用 Node.js 執行，不需要額外工具。Wireshark 的測試會在測試裡組出 pcap 檔（Ethernet、IPv4、UDP 或 TCP），用 `tshark -X lua_script:... -T fields` 讀回每個封包的欄位與專家資訊；需要 `tshark`（含 Lua，在 PATH 或 Windows 預設安裝位置），找不到就略過，設定 `PKTSPEC_REQUIRE_TSHARK` 則改為失敗。
 
 ## 授權
 

@@ -62,6 +62,24 @@ describe('cli', () => {
     expect(readFileSync(join(dir, 'index.ts'), 'utf8')).toContain("export * from './Login.js';");
   });
 
+  it('generates a Wireshark dissector with a default port', () => {
+    const result = run('gen', 'wireshark', example, '-o', dir, '--port', '7000');
+    expect(result).toMatchObject({ code: 0, out: `wrote 1 file to ${dir}` });
+    const content = readFileSync(join(dir, 'chat-room.lua'), 'utf8');
+    expect(content).toContain('local proto = Proto("chat_room", "chat-room")');
+    expect(content).toContain('local DEFAULT_PORT = 7000');
+    run('gen', 'wireshark', example, '-o', dir);
+    expect(readFileSync(join(dir, 'chat-room.lua'), 'utf8')).toContain('local DEFAULT_PORT = 0');
+  });
+
+  it('rejects a port that is not a port number', () => {
+    for (const port of ['0', '65536', 'http', '80.5', '-1']) {
+      const result = run('gen', 'wireshark', example, '-o', dir, `--port=${port}`);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain(`'${port}' is not a valid port`);
+    }
+  });
+
   it('rejects an invalid C# namespace', () => {
     const result = run('gen', 'csharp', example, '-o', dir, '--namespace', 'Example.new');
     expect(result).toMatchObject({
@@ -167,7 +185,7 @@ describe('cli', () => {
 
   it('explains usage mistakes', () => {
     expect(run('gen', 'rust', example, '-o', dir).err).toContain(
-      "unknown target 'rust'; expected one of: java, csharp, typescript, docs",
+      "unknown target 'rust'; expected one of: java, csharp, typescript, wireshark, docs",
     );
     expect(run('gen', 'java', example).err).toContain('gen requires --out <dir>');
     expect(run('check', join(dir, 'missing.yaml')).err).toContain('cannot read');

@@ -27,6 +27,11 @@
 - 結束碼：有 breaking 回 1、參數錯誤回 2；檔案無法讀取或沒通過檢查時和 `check` 一致回 1（和 breaking 同碼，要靠 stderr 區分）。
 - 測試：`test/diff.test.ts` 每條規則一組小定義檔，`test/cli.test.ts` 驗文字、JSON 輸出與結束碼，範例在 `test/fixtures/diff-old.yaml`、`diff-new.yaml`。
 
+- Wireshark dissector：`pktspec gen wireshark`，`--port` 設 TCP、UDP、伺服器連接埠偏好設定的預設值；輸出單一 `<name>.lua`（3.6 以上、無外部模組），欄位表由產生器寫成資料，Lua 端用一個小直譯器走過。
+- 封包沒有長度前綴，所以不做 TCP 重組，一個 UDP 封包或 TCP 區段就是一則訊息；方向看伺服器連接埠，對不上就兩個方向都試解（試解用丟棄結果的假樹），平手當 c2s 並提示。
+- 專家資訊：截斷、未知 opcode、未知列舉值、長度超出、巢狀過深（64 層）、尾端多餘資料、方向不明。
+- 測試：golden file（`test/golden/wireshark/`）、`test/wireshark.test.ts`、`test/roundtrip-wireshark.test.ts`（測試內組 pcap，跑 `tshark -T fields` 比對欄位與專家資訊）；沒有含 Lua 的 `tshark` 時略過，`PKTSPEC_REQUIRE_TSHARK` 設定時改為失敗。CI 還沒裝 Wireshark，所以那邊略過。
+
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
@@ -34,6 +39,8 @@
 - 結構只能透過長度前綴陣列遞迴。
 - TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
 - `diff` 不偵測結構、列舉改名（視為移除加新增）；欄位改名只認同位置、同型別的情況；列舉值新增算相容，但產生的程式遇到未知值會丟錯。
+
+- Wireshark：不重組 TCP；長度前綴的 u32 超過封包長度一律標成長度錯誤；沒有 `bytes` 陣列所以也不處理。
 
 ## 下一步
 
