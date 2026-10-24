@@ -3,6 +3,9 @@ import {
   DEFAULT_LENGTH_TYPE,
   INT_RANGES,
   PRIMITIVE_SIZES,
+  type BitField,
+  type BitFieldType,
+  type BitsBaseType,
   type Direction,
   type ElementType,
   type Endian,
@@ -61,6 +64,7 @@ const TYPE_EXPRESSION = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d*)\])?$/;
 const LENGTH_TYPES: readonly LengthType[] = ['u8', 'u16', 'u32'];
 const OPCODE_TYPES: readonly OpcodeType[] = ['u8', 'u16'];
 const ENUM_TYPES: readonly EnumBaseType[] = ['u8', 'u16', 'u32', 'i8', 'i16', 'i32'];
+const BITS_BASE_TYPES: readonly BitsBaseType[] = ['u8', 'u16', 'u32'];
 const ENDIANS: readonly Endian[] = ['little', 'big'];
 const DIRECTIONS: readonly Direction[] = ['c2s', 's2c'];
 const BUILTIN_TYPES = [...Object.keys(PRIMITIVE_SIZES), 'string', 'bytes'];
@@ -95,6 +99,8 @@ class Compiler {
   private readonly declared = new Map<string, { kind: string; node: Node }>();
   private readonly enumNames = new Set<string>();
   private readonly structNodes = new Map<string, Node>();
+  private readonly enums = new Map<string, Enum>();
+  private readonly bitNodes = new Map<BitField, Node>();
 
   constructor(private readonly lines: LineCounter) {}
 
@@ -137,6 +143,8 @@ class Compiler {
 
     const packetItems = this.packetItems(entries.get('packets'));
     const enums = [...enumEntries].flatMap(([n, e]) => this.enumDefinition(n, e) ?? []);
+    // Bit fields check that every value of their enum fits, so enums are read first.
+    for (const definition of enums) this.enums.set(definition.name, definition);
     const structs = [...structEntries].map(([n, e]) => this.struct(n, e));
     const packets = this.packets(packetItems, opcode);
     this.checkStructCycles(structs);
@@ -332,46 +340,172 @@ class Compiler {
     }
     const fields: Field[] = [];
     const seen = new Map<string, string>();
+    // Generators convert names to their language's convention, so `room_id` and `roomId` clash.
+    const claim = (name: string, node: Node) => {
+      const normalized = name.replace(/_/g, '').toLowerCase();
+      const previous = seen.get(normalized);
+      if (previous === name) {
+        this.error(node, `duplicate field '${previous}'`);
+      } else if (previous !== undefined) {
+        this.error(node, `field '${name}' clashes with '${previous}' once converted to camelCase`);
+      }
+      seen.set(normalized, name);
+    };
     for (const item of entry.value.items as Node[]) {
       const field = this.field(item);
       if (!field) continue;
-      // Generators convert names to their language's convention, so `room_id` and `roomId` clash.
-      const normalized = field.field.name.replace(/_/g, '').toLowerCase();
-      const previous = seen.get(normalized);
-      if (previous === field.field.name) {
-        this.error(field.nameNode, `duplicate field '${previous}'`);
-      } else if (previous !== undefined) {
-        this.error(
-          field.nameNode,
-          `field '${field.field.name}' clashes with '${previous}' once converted to camelCase`,
-        );
+      const { name, type } = field.field;
+      claim(name, field.nameNode);
+      this.locations.set(`${owner}/field:${name}`, this.position(field.nameNode));
+      // Bit fields become members next to the other fields, so they share one namespace.
+      for (const bit of type.kind === 'bits' ? type.fields : []) {
+        const node = this.bitNodes.get(bit)!;
+        claim(bit.name, node);
+        this.locations.set(`${owner}/field:${name}/bit:${bit.name}`, this.position(node));
       }
-      seen.set(normalized, field.field.name);
-      this.locations.set(`${owner}/field:${field.field.name}`, this.position(field.nameNode));
       fields.push(field.field);
     }
     return fields;
   }
 
   private field(item: Node): { field: Field; nameNode: Node } | undefined {
-    const entries = this.entries(item, 'field', ['name', 'type', 'length', 'size', 'doc']);
+    const entries = this.entries(item, 'field', ['name', 'type', 'length', 'size', 'bits', 'doc']);
     if (!entries) return undefined;
     const nameEntry = this.require(entries, 'name', item, 'field');
-    const name = nameEntry && this.string(nameEntry, 'field name');
-    const validName = name !== undefined && IDENTIFIER.test(name) && FIELD_NAME_START.test(name);
-    if (nameEntry && name !== undefined && !IDENTIFIER.test(name)) {
-      this.error(nameEntry.value, `field name '${name}' is not a valid identifier`);
-    } else if (nameEntry && name !== undefined && !validName) {
+    const name = nameEntry && this.fieldName(nameEntry, 'field');
+    const typeEntry = this.require(entries, 'type', item, name ? `field '${name}'` : 'field');
+    const bitsEntry = entries.get('bits');
+    const type =
+      typeEntry &&
+      (bitsEntry
+        ? this.bitsType(typeEntry, bitsEntry, entries)
+        : this.fieldType(typeEntry, entries));
+    const doc = this.optionalString(entries.get('doc'), "'doc'");
+    if (!nameEntry || name === undefined || !type) return undefined;
+    return { field: { name, type, doc }, nameNode: nameEntry.value ?? nameEntry.key };
+  }
+
+  /** Returns the name of a field or bit field, or undefined after reporting why it is unusable. */
+  private fieldName(entry: Entry, what: string): string | undefined {
+    const name = this.string(entry, `${what} name`);
+    if (name === undefined) return undefined;
+    if (!IDENTIFIER.test(name)) {
+      this.error(entry.value, `${what} name '${name}' is not a valid identifier`);
+      return undefined;
+    }
+    if (!FIELD_NAME_START.test(name)) {
       this.error(
-        nameEntry.value,
-        `field name '${name}' must start with a letter once leading underscores are dropped for camelCase`,
+        entry.value,
+        `${what} name '${name}' must start with a letter once leading underscores are dropped for camelCase`,
+      );
+      return undefined;
+    }
+    return name;
+  }
+
+  private bitsType(typeEntry: Entry, bitsEntry: Entry, entries: Entries): FieldType | undefined {
+    for (const key of ['length', 'size']) {
+      const entry = entries.get(key);
+      if (entry) this.error(entry.key, `'${key}' does not apply to bit fields`);
+    }
+    const text = this.string(typeEntry, "'type'");
+    let base: BitsBaseType | undefined;
+    if (text !== undefined && TYPE_EXPRESSION.exec(text)?.[2] !== undefined) {
+      this.error(
+        typeEntry.value,
+        'bit fields cannot be arrays; wrap them in a struct and use an array of the struct',
+      );
+    } else if (text !== undefined && !(BITS_BASE_TYPES as readonly string[]).includes(text)) {
+      this.error(
+        typeEntry.value,
+        `bit fields must be stored in one of: ${BITS_BASE_TYPES.join(', ')}`,
+      );
+    } else if (text !== undefined) {
+      base = text as BitsBaseType;
+    }
+
+    if (!isSeq(bitsEntry.value)) {
+      this.error(bitsEntry.value ?? bitsEntry.key, "'bits' must be a list");
+      return undefined;
+    }
+    const items = bitsEntry.value.items as Node[];
+    if (items.length === 0) this.error(bitsEntry.value, "'bits' must list at least one field");
+    const fields = items.flatMap((item) => this.bitField(item) ?? []);
+    const used = fields.reduce((sum, field) => sum + field.bits, 0);
+    const width = base && PRIMITIVE_SIZES[base] * 8;
+    if (width !== undefined && used > width) {
+      this.error(
+        typeEntry.value,
+        `bit fields take ${used} bits, more than the ${width} bits of ${base}`,
       );
     }
-    const typeEntry = this.require(entries, 'type', item, name ? `field '${name}'` : 'field');
-    const type = typeEntry && this.fieldType(typeEntry, entries);
+    if (!base || fields.length !== items.length || items.length === 0) return undefined;
+    return { kind: 'bits', base, fields };
+  }
+
+  private bitField(item: Node): BitField | undefined {
+    const entries = this.entries(item, 'bit field', ['name', 'type', 'bits', 'doc']);
+    if (!entries) return undefined;
+    const nameEntry = this.require(entries, 'name', item, 'bit field');
+    const name = nameEntry && this.fieldName(nameEntry, 'bit field');
+    const what = name ? `bit field '${name}'` : 'bit field';
+    const typeEntry = entries.get('type');
+    const type: BitFieldType | undefined = typeEntry
+      ? this.bitFieldType(typeEntry)
+      : { kind: 'uint' };
+    const bitsEntry = entries.get('bits');
     const doc = this.optionalString(entries.get('doc'), "'doc'");
-    if (!nameEntry || name === undefined || !validName || !type) return undefined;
-    return { field: { name, type, doc }, nameNode: nameEntry.value ?? nameEntry.key };
+
+    let bits: number | undefined;
+    if (bitsEntry) {
+      bits = this.positiveInteger(bitsEntry, `'bits' of ${what}`);
+    } else if (type?.kind === 'bool') {
+      bits = 1;
+    } else if (type) {
+      this.error(item, `${what} is missing 'bits'`);
+    }
+    if (type?.kind === 'bool' && bitsEntry && bits !== undefined && bits !== 1) {
+      this.error(bitsEntry.value, 'a bool bit field takes exactly 1 bit');
+      bits = undefined;
+    }
+    if (type?.kind === 'enum' && bitsEntry && bits !== undefined) {
+      const max = 2 ** bits - 1;
+      const outside = this.enums.get(type.name)?.values.find((v) => v.value < 0 || v.value > max);
+      if (outside) {
+        this.error(
+          bitsEntry.value,
+          `enum '${type.name}' value '${outside.name}' (${outside.value}) does not fit in ${bits} bits (0..${max})`,
+        );
+        bits = undefined;
+      }
+    }
+    if (!nameEntry || name === undefined || !type || bits === undefined) return undefined;
+    const field: BitField = { name, bits, type, doc };
+    this.bitNodes.set(field, nameEntry.value ?? nameEntry.key);
+    return field;
+  }
+
+  private bitFieldType(entry: Entry): BitFieldType | undefined {
+    const text = this.string(entry, "'type'");
+    if (text === undefined) return undefined;
+    if (text === 'bool') return { kind: 'bool' };
+    if (this.enumNames.has(text)) return { kind: 'enum', name: text };
+    const base = TYPE_EXPRESSION.exec(text)?.[1];
+    if (base !== undefined && (BUILTIN_TYPES.includes(base) || this.declared.has(base))) {
+      this.error(
+        entry.value,
+        "bit field type must be bool or an enum; leave out 'type' for an unsigned integer",
+      );
+      return undefined;
+    }
+    const suggestion = ['bool', ...this.enumNames].find(
+      (name) => name.toLowerCase() === text.toLowerCase(),
+    );
+    this.error(
+      entry.value,
+      `unknown type '${text}'` + (suggestion ? `; did you mean '${suggestion}'?` : ''),
+    );
+    return undefined;
   }
 
   private fieldType(typeEntry: Entry, entries: Entries): FieldType | undefined {

@@ -4,12 +4,13 @@ import {
   generateCSharp,
   isValidCSharpNamespace,
 } from '../src/gen/csharp.js';
-import { allTypes, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 describe('generateCSharp', () => {
   for (const [name, load] of [
     ['chat-room', chatRoom],
     ['all-types', allTypes],
+    ['bit-fields', bitFields],
   ] as const) {
     it(`matches the golden files for ${name}`, async () => {
       const files = generateCSharp(load());

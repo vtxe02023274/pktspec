@@ -1,8 +1,11 @@
 import type { Locations, SourcePosition } from './compile.js';
 import { hex } from './gen/common.js';
 import {
+  bitLayout,
   findEnum,
   findStruct,
+  type BitField,
+  type BitsType,
   type Enum,
   type Field,
   type FieldType,
@@ -109,13 +112,18 @@ class Differ {
   private readonly changes: Change[] = [];
   private readonly oldUsers: Map<UsageKey, Set<string>>;
   private readonly newUsers: Map<UsageKey, Set<string>>;
+  // Bit fields only carry the value of an enum, so its underlying type does not reach the wire.
+  private readonly oldByteUsers: Map<UsageKey, Set<string>>;
+  private readonly newByteUsers: Map<UsageKey, Set<string>>;
 
   constructor(
     private readonly before: Spec,
     private readonly after: Spec,
   ) {
-    this.oldUsers = usage(before.protocol);
-    this.newUsers = usage(after.protocol);
+    this.oldUsers = usage(before.protocol, true);
+    this.newUsers = usage(after.protocol, true);
+    this.oldByteUsers = usage(before.protocol, false);
+    this.newByteUsers = usage(after.protocol, false);
   }
 
   run(): Change[] {
@@ -217,15 +225,17 @@ class Differ {
     const at = (suffix = '') =>
       this.positions(`enum:${a.name}${suffix}`, `enum:${b.name}${suffix}`);
     if (a.type !== b.type) {
+      const byteUsers = this.users(`enum:${b.name}`, false);
+      const bitsOnly = users.length > 0 && byteUsers.length === 0;
       this.add(
-        breaking,
+        byteUsers.length > 0 ? 'breaking' : 'info',
         'enum-type-changed',
         'enum',
         b.name,
         `enum '${b.name}' underlying type changed from ${a.type} to ${b.type}`,
         at('/type'),
-        users,
-        unused,
+        byteUsers,
+        bitsOnly ? 'only used in bit fields, which do not depend on it' : unused,
       );
     }
     if (a.doc !== b.doc) {
@@ -542,6 +552,9 @@ class Differ {
     const now = this.text(g.type);
     const sameWire = this.sig(f.type, 'old') === this.sig(g.type, 'new');
     // A struct or enum with the same name changed underneath; that is reported on the type itself.
+    if (was === now && f.type.kind === 'bits' && g.type.kind === 'bits') {
+      this.bitChanges(f.name, f.type, g.name, g.type, emit);
+    }
     if (was !== now) {
       if (sameWire) {
         emit(
@@ -558,6 +571,141 @@ class Differ {
       }
     }
     if (f.doc !== g.doc) emit('info', 'doc-changed', g.name, 'doc changed', f.name, g.name);
+  }
+
+  /**
+   * Bit fields are matched by name first, then by position like fields. Whatever moves changes
+   * what the other side reads; a new field in bits that used to be unused reads as 0 on both
+   * old and new peers, so it is compatible unless 0 is not a value of its enum.
+   */
+  private bitChanges(
+    oldGroup: string,
+    a: BitsType,
+    newGroup: string,
+    b: BitsType,
+    emit: (
+      s: Severity,
+      rule: string,
+      path: string,
+      message: string,
+      oldField?: string,
+      newField?: string,
+    ) => void,
+  ): void {
+    const before = bitLayout(a.fields);
+    const after = bitLayout(b.fields);
+    const span = (p: { field: BitField; offset: number }) =>
+      p.field.bits === 1 ? `bit ${p.offset}` : `bits ${p.offset}-${p.offset + p.field.bits - 1}`;
+    const kind = (field: BitField) =>
+      field.type.kind === 'enum'
+        ? field.type.name
+        : field.type.kind === 'bool'
+          ? 'bool'
+          : 'unsigned';
+    const at = (old?: BitField, now?: BitField) =>
+      [old && `${oldGroup}/bit:${old.name}`, now && `${newGroup}/bit:${now.name}`] as const;
+
+    const pairs: Array<[number, number]> = [];
+    const usedOld = new Set<number>();
+    const usedNew = new Set<number>();
+    before.forEach((p, i) => {
+      const j = after.findIndex((q) => q.field.name === p.field.name);
+      if (j < 0) return;
+      pairs.push([i, j]);
+      usedOld.add(i);
+      usedNew.add(j);
+    });
+    before.forEach((p, i) => {
+      const q = after[i];
+      if (usedOld.has(i) || !q || usedNew.has(i)) return;
+      if (p.offset !== q.offset || p.field.bits !== q.field.bits) return;
+      if (kind(p.field) !== kind(q.field)) return;
+      pairs.push([i, i]);
+      usedOld.add(i);
+      usedNew.add(i);
+      emit(
+        'info',
+        'bit-field-renamed',
+        `${newGroup}.${q.field.name}`,
+        `renamed from '${p.field.name}'`,
+        ...at(p.field, q.field),
+      );
+    });
+
+    for (const [i, j] of pairs.sort((x, y) => x[0] - y[0])) {
+      const p = before[i]!;
+      const q = after[j]!;
+      const path = `${newGroup}.${q.field.name}`;
+      if (p.field.bits !== q.field.bits) {
+        emit(
+          'breaking',
+          'bit-field-resized',
+          path,
+          `size changed from ${p.field.bits} to ${q.field.bits} bits`,
+          ...at(p.field, q.field),
+        );
+      } else if (p.offset !== q.offset) {
+        emit(
+          'breaking',
+          'bit-field-moved',
+          path,
+          `moved from ${span(p)} to ${span(q)}`,
+          ...at(p.field, q.field),
+        );
+      }
+      if (kind(p.field) !== kind(q.field)) {
+        emit(
+          'breaking',
+          'bit-field-type-changed',
+          path,
+          `type changed from ${kind(p.field)} to ${kind(q.field)}`,
+          ...at(p.field, q.field),
+        );
+      }
+      if (p.field.doc !== q.field.doc) {
+        emit('info', 'doc-changed', path, 'doc changed', ...at(p.field, q.field));
+      }
+    }
+
+    before.forEach((p, i) => {
+      if (usedOld.has(i)) return;
+      emit(
+        'breaking',
+        'bit-field-removed',
+        `${newGroup}.${p.field.name}`,
+        `removed (${span(p)}); old versions still read it and get 0`,
+        ...at(p.field),
+      );
+    });
+    const oldUsed = a.fields.reduce((sum, field) => sum + field.bits, 0);
+    after.forEach((q, j) => {
+      if (usedNew.has(j)) return;
+      const path = `${newGroup}.${q.field.name}`;
+      const where = at(undefined, q.field);
+      if (q.offset < oldUsed) {
+        emit(
+          'breaking',
+          'bit-field-added',
+          path,
+          `added (${span(q)}) over bits that old versions use`,
+          ...where,
+        );
+        return;
+      }
+      const type = q.field.type;
+      const noZero =
+        type.kind === 'enum' &&
+        !findEnum(this.after.protocol, type.name).values.some((v) => v.value === 0);
+      emit(
+        noZero ? 'breaking' : 'compatible',
+        'bit-field-added',
+        path,
+        noZero
+          ? `added (${span(q)}) in unused bits, but old versions send 0, which enum '${kind(q.field)}' does not define`
+          : `added (${span(q)}) in unused bits, which old versions write as 0 and ignore`,
+        ...where,
+      );
+    });
   }
 
   private text(type: FieldType): string {
@@ -577,6 +725,8 @@ class Differ {
         return `${this.text(type.element)}[] (${type.length} length)`;
       case 'fixedArray':
         return `${this.text(type.element)}[${type.size}]`;
+      case 'bits':
+        return `${type.base} bit fields`;
     }
   }
 
@@ -603,11 +753,18 @@ class Differ {
         return `[${this.sig(type.element, side, stack)}]:${type.length}`;
       case 'fixedArray':
         return `[${this.sig(type.element, side, stack)}]x${type.size}`;
+      case 'bits': {
+        const parts = type.fields.map((f) => `${f.type.kind}:${f.bits}`);
+        return `${type.base}<${parts.join(',')}>`;
+      }
     }
   }
 
-  private users(key: UsageKey): string[] {
-    const merged = new Set([...(this.oldUsers.get(key) ?? []), ...(this.newUsers.get(key) ?? [])]);
+  private users(key: UsageKey, bits = true): string[] {
+    const [old, now] = bits
+      ? [this.oldUsers, this.newUsers]
+      : [this.oldByteUsers, this.newByteUsers];
+    const merged = new Set([...(old.get(key) ?? []), ...(now.get(key) ?? [])]);
     return [...merged].sort();
   }
 
@@ -669,8 +826,11 @@ function fieldRule(a: FieldType, b: FieldType, sigA: string, sigB: string): stri
   return 'field-type-changed';
 }
 
-/** For every struct and enum, the packets that reach it through their fields. */
-function usage(protocol: Protocol): Map<UsageKey, Set<string>> {
+/**
+ * For every struct and enum, the packets that reach it through their fields; enums held in bit
+ * fields count only when `bits` is set.
+ */
+function usage(protocol: Protocol, bits: boolean): Map<UsageKey, Set<string>> {
   const result = new Map<UsageKey, Set<string>>();
   const mark = (key: UsageKey, packet: string) => {
     let set = result.get(key);
@@ -681,6 +841,12 @@ function usage(protocol: Protocol): Map<UsageKey, Set<string>> {
     const seen = new Set<string>();
     const walk = (fields: Field[]) => {
       for (const { type } of fields) {
+        if (type.kind === 'bits') {
+          for (const bit of bits ? type.fields : []) {
+            if (bit.type.kind === 'enum') mark(`enum:${bit.type.name}`, packet.name);
+          }
+          continue;
+        }
         const element = type.kind === 'array' || type.kind === 'fixedArray' ? type.element : type;
         if (element.kind === 'enum') mark(`enum:${element.name}`, packet.name);
         if (element.kind === 'struct' && !seen.has(element.name)) {

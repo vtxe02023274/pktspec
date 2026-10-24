@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { defaultCppNamespace, generateCpp, isValidCppNamespace } from '../src/gen/cpp.js';
-import { allTypes, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 describe('generateCpp', () => {
   for (const [name, load] of [
     ['chat-room', chatRoom],
     ['all-types', allTypes],
+    ['bit-fields', bitFields],
   ] as const) {
     it(`matches the golden files for ${name}`, async () => {
       const files = generateCpp(load());

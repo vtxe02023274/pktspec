@@ -1,11 +1,19 @@
 import {
   PRIMITIVE_SIZES,
+  bitEnums,
+  bitGroups,
+  bitLayout,
+  bitMember,
   findEnum,
+  memberFields,
   wireSize,
+  type BitsType,
   type ElementType,
   type Enum,
   type Field,
   type FieldType,
+  type MemberField,
+  type MemberType,
   type Packet,
   type PrimitiveType,
   type Protocol,
@@ -138,6 +146,13 @@ const INT_LIMITS: Partial<Record<PrimitiveType, [string, string]>> = {
 
 const INDENT = '  ';
 
+const CHECK_BITS = `export function checkBits(value: number, bits: number, field: string): number {
+  if (!Number.isInteger(value) || value < 0 || value >= 2 ** bits) {
+    throw new RangeError(\`\${field} out of range for \${bits} bits: \${value}\`);
+  }
+  return value;
+}`;
+
 // Editors treat NEL, LS and PS as line breaks too, so each doc line needs its own comment prefix.
 const LINE_BREAKS = new RegExp('\r\n|[\r\n' + String.fromCharCode(0x85, 0x2028, 0x2029) + ']');
 
@@ -155,7 +170,7 @@ class TypeScriptGenerator {
   private readonly prefix: string;
   private readonly codec: string;
   private readonly protocolConst: string;
-  private readonly memberNames = new Map<Field, string>();
+  private readonly memberNames = new Map<MemberField, string>();
   private readonly enumMembers = new Map<string, string[]>();
 
   constructor(private readonly protocol: Protocol) {
@@ -180,7 +195,7 @@ class TypeScriptGenerator {
     }
     for (const { fields } of [...protocol.structs, ...protocol.packets]) {
       const used = new Set(RESERVED_MEMBERS);
-      for (const field of fields) {
+      for (const field of memberFields(fields)) {
         this.memberNames.set(field, uniqueName(camelCase(field.name), used));
       }
     }
@@ -214,11 +229,11 @@ class TypeScriptGenerator {
     ];
   }
 
-  private member(field: Field): string {
+  private member(field: MemberField): string {
     return this.memberNames.get(field)!;
   }
 
-  private parameter(field: Field): string {
+  private parameter(field: MemberField): string {
     const member = this.member(field);
     return RESERVED_WORDS.has(member) ? `${member}_` : member;
   }
@@ -472,7 +487,12 @@ ${methods}
   }
 
   private codecModule(): string {
-    const enumReaders = this.protocol.enums.map((e) => this.enumReader(e));
+    const inBits = bitEnums(this.protocol);
+    const enumReaders = this.protocol.enums.flatMap((e) => [
+      this.enumReader(e),
+      ...(inBits.has(e.name) ? [this.bitEnumReader(e)] : []),
+    ]);
+    const checkBits = bitGroups(this.protocol).length > 0 ? `\n\n${CHECK_BITS}` : '';
     const imports: Import[] = [
       {
         from: './PacketErrors.js',
@@ -557,7 +577,7 @@ export function format(value: unknown): string {
     return \`[\${value.map((item) => format(item)).join(', ')}]\`;
   }
   return String(value);
-}${enumReaders.map((r) => `\n\n${r}`).join('')}`,
+}${checkBits}${enumReaders.map((r) => `\n\n${r}`).join('')}`,
     );
   }
 
@@ -566,6 +586,20 @@ export function format(value: unknown): string {
     const cases = values.map((v) => `${INDENT}${INDENT}case ${v}:`).join('\n');
     return `export function read${definition.name}(reader: PacketReader): ${definition.name} {
   const value = reader.read${WIRE_NAMES[definition.type]}();
+  switch (value) {
+${cases}
+      return value as ${definition.name};
+    default:
+      throw new InvalidPacketError(\`unknown ${definition.name} value: \${value}\`);
+  }
+}`;
+  }
+
+  private bitEnumReader(definition: Enum): string {
+    const values = [...new Set(definition.values.map((v) => v.value))];
+    const cases = values.map((v) => `${INDENT}${INDENT}case ${v}:`).join('\n');
+    return `/** Checks a value taken from a bit field against the values of ${definition.name}. */
+export function bitsTo${definition.name}(value: number): ${definition.name} {
   switch (value) {
 ${cases}
       return value as ${definition.name};
@@ -659,12 +693,13 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
   ): string {
     const members: string[] = [];
     const opcodeDigits = this.protocol.opcode === 'u8' ? 2 : 4;
+    const exposed = memberFields(fields);
     if (packet) {
       members.push(`  static readonly OPCODE = ${hex(packet.opcode, opcodeDigits)};`);
     }
-    if (fields.length > 0) {
+    if (exposed.length > 0) {
       members.push(
-        fields
+        exposed
           .map(
             (field) =>
               jsdoc(field.doc, INDENT) +
@@ -672,7 +707,7 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
           )
           .join('\n'),
       );
-      members.push(this.constructorMethod(fields));
+      members.push(this.constructorMethod(exposed));
     }
     if (packet) {
       members.push(`  get opcode(): number {
@@ -687,8 +722,8 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
   }`);
     }
     members.push(this.readMethod(name, fields));
-    members.push(this.equalsMethod(name, fields));
-    members.push(this.toStringMethod(name, fields));
+    members.push(this.equalsMethod(name, exposed));
+    members.push(this.toStringMethod(name, exposed));
 
     const direction = packet?.direction === 'c2s' ? 'client to server' : 'server to client';
     const opcodeDoc = packet
@@ -708,14 +743,14 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
     if (packet) {
       imports.push(typeImport('Packet'), valueImport(this.protocolConst));
     }
-    for (const dependency of this.dependencies(fields)) {
+    for (const dependency of this.dependencies(exposed)) {
       if (dependency !== name) imports.push(valueImport(dependency));
     }
     const header = packet ? `export class ${name} implements Packet {` : `export class ${name} {`;
     return this.file(imports, `${jsdoc(classDoc, '')}${header}\n${body}\n}`);
   }
 
-  private dependencies(fields: Field[]): string[] {
+  private dependencies(fields: MemberField[]): string[] {
     const names = new Set<string>();
     for (const { type } of fields) {
       const element = type.kind === 'array' || type.kind === 'fixedArray' ? type.element : type;
@@ -724,7 +759,7 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
     return [...names];
   }
 
-  private constructorMethod(fields: Field[]): string {
+  private constructorMethod(fields: MemberField[]): string {
     const parameters = fields.map(
       (f) => `${this.parameter(f)}: ${this.tsType(f.type)} = ${this.defaultValue(f.type)}`,
     );
@@ -743,12 +778,14 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const value = `this.${this.member(field)}`;
       const { type } = field;
       const size = wireSize(type, this.protocol);
       if (size.fixed) {
         fixed += size.min;
-      } else if (type.kind === 'array' || type.kind === 'fixedArray') {
+        continue;
+      }
+      const value = `this.${this.member(field as MemberField)}`;
+      if (type.kind === 'array' || type.kind === 'fixedArray') {
         const element = wireSize(type.element, this.protocol);
         const prefix = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
         fixed += prefix;
@@ -775,7 +812,7 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
     return `${doc}  ${signature} {\n${body}  }`;
   }
 
-  private variableSize(type: ElementType, value: string): string {
+  private variableSize(type: FieldType, value: string): string {
     switch (type.kind) {
       case 'string':
         return `${this.codec}.stringSize(${value}, ${PRIMITIVE_SIZES[type.length]})`;
@@ -790,9 +827,10 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
 
   private writeMethod(fields: Field[], isPacket: boolean): string {
     const statements = fields.flatMap((field) => {
-      const name = this.member(field);
-      const value = `this.${name}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.writeBits(type, `${camelCase(field.name)}Bits`);
+      const name = this.member(field as MemberField);
+      const value = `this.${name}`;
       if (type.kind !== 'array' && type.kind !== 'fixedArray') {
         return [`${this.write(type, value, name)};`];
       }
@@ -811,6 +849,26 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
     const writer = fields.length === 0 ? '_writer' : 'writer';
     const signature = `  writeTo(${writer}: PacketWriter): void {`;
     return `${doc}${signature}${statements.length === 0 ? '}' : `\n${indentLines(statements)}  }`}`;
+  }
+
+  // Bitwise operators work on signed 32-bit integers, so a u32 is brought back with >>> 0.
+  private writeBits(type: BitsType, local: string): string[] {
+    const statements = [`let ${local} = 0;`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const member = this.member(bitMember(field));
+      const shift = offset === 0 ? '' : ` << ${offset}`;
+      if (field.type.kind === 'bool') {
+        const bit = `this.${member} ? 1 : 0`;
+        statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
+        continue;
+      }
+      statements.push(
+        `${local} |= ${this.codec}.checkBits(this.${member}, ${field.bits}, ${tsString(member)})${shift};`,
+      );
+    }
+    const value = type.base === 'u32' ? `${local} >>> 0` : local;
+    statements.push(`writer.write${WIRE_NAMES[type.base]}(${value});`);
+    return statements;
   }
 
   private write(type: ElementType, value: string, field: string): string {
@@ -832,9 +890,10 @@ export type ${definition.name} = (typeof ${definition.name})[keyof typeof ${defi
 
   private readMethod(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const member = this.member(field);
-      const target = `result.${member}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.readBits(type, `${camelCase(field.name)}Bits`);
+      const member = this.member(field as MemberField);
+      const target = `result.${member}`;
       if (type.kind === 'array') {
         const count = `${member}Count`;
         return [
@@ -863,6 +922,26 @@ ${indentLines(statements)}    return result;
   }`;
   }
 
+  private readBits(type: BitsType, local: string): string[] {
+    const statements = [`const ${local} = reader.read${WIRE_NAMES[type.base]}();`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const target = `result.${this.member(bitMember(field))}`;
+      // A mask reaching bit 31 would make the result negative; >>> alone already drops the rest.
+      const bits =
+        offset + field.bits === 32
+          ? `${local} >>> ${offset}`
+          : `${offset === 0 ? local : `(${local} >>> ${offset})`} & ${hexLower(2 ** field.bits - 1)}`;
+      if (field.type.kind === 'bool') {
+        statements.push(`${target} = (${bits}) !== 0;`);
+      } else if (field.type.kind === 'enum') {
+        statements.push(`${target} = ${this.codec}.bitsTo${field.type.name}(${bits});`);
+      } else {
+        statements.push(`${target} = ${bits};`);
+      }
+    }
+    return statements;
+  }
+
   private read(type: ElementType): string {
     switch (type.kind) {
       case 'primitive':
@@ -880,7 +959,7 @@ ${indentLines(statements)}    return result;
     }
   }
 
-  private equalsMethod(name: string, fields: Field[]): string {
+  private equalsMethod(name: string, fields: MemberField[]): string {
     if (fields.length === 0) {
       return `  equals(other: unknown): boolean {
     return other instanceof ${name};
@@ -928,7 +1007,7 @@ ${indentLines(statements)}    return result;
     return `(x, y) => ${this.compare(type, 'x', 'y')}`;
   }
 
-  private toStringMethod(name: string, fields: Field[]): string {
+  private toStringMethod(name: string, fields: MemberField[]): string {
     const parts = fields.map((field, index) => {
       const n = this.member(field);
       const { type } = field;
@@ -945,7 +1024,7 @@ ${indentLines(statements)}    return result;
   }`;
   }
 
-  private tsType(type: FieldType): string {
+  private tsType(type: MemberType): string {
     switch (type.kind) {
       case 'primitive':
         return PRIMITIVE_TS[type.name];
@@ -963,7 +1042,7 @@ ${indentLines(statements)}    return result;
     }
   }
 
-  private defaultValue(type: FieldType): string {
+  private defaultValue(type: MemberType): string {
     switch (type.kind) {
       case 'primitive':
         if (type.name === 'bool') return 'false';
@@ -993,6 +1072,10 @@ ${indentLines(statements)}    return result;
     const header = `// Generated by pktspec from ${this.protocol.name}. Do not edit.\n`;
     return `${header}${importLines.length > 0 ? '\n' + importLines.join('\n') + '\n' : ''}\n${body}\n`;
   }
+}
+
+function hexLower(value: number): string {
+  return '0x' + value.toString(16).padStart(2, '0');
 }
 
 function valueImport(name: string): Import {

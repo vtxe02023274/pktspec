@@ -1,7 +1,10 @@
 import {
   PRIMITIVE_SIZES,
+  bitGroups,
+  bitLayout,
   findEnum,
   wireSize,
+  type BitsType,
   type ElementType,
   type Field,
   type Packet,
@@ -129,7 +132,7 @@ proto.prefs.tcp_port = Pref.uint("TCP port", DEFAULT_PORT, "TCP port carrying th
 proto.prefs.udp_port = Pref.uint("UDP port", DEFAULT_PORT, "UDP port carrying the protocol, 0 for none")
 proto.prefs.server_port = Pref.uint("Server port", DEFAULT_PORT, "Port the server listens on, used to tell the direction; 0 uses the TCP and UDP ports")
 
-${RUNTIME}`;
+${runtime(bitGroups(this.protocol).length > 0)}`;
   }
 
   private packetEntry(packet: Packet): string {
@@ -147,6 +150,7 @@ ${RUNTIME}`;
     const abbrev = uniqueName(`${base}.${snakeCase(field.name)}`, this.used);
     const name = luaString(field.name);
     const { type } = field;
+    if (type.kind === 'bits') return this.bitsEntry(type, abbrev, name, base);
     if (type.kind !== 'array' && type.kind !== 'fixedArray') {
       return `{ pf = reg(${this.protoField(type, abbrev, name)}), t = ${this.descriptor(type)} }`;
     }
@@ -160,6 +164,28 @@ ${RUNTIME}`;
         ? `count = ${PRIMITIVE_SIZES[type.length]}, min = ${wireSize(type.element, this.protocol).min}`
         : `size = ${type.size}`;
     return `{ name = ${name}, pf = reg(${container}), item = reg(${this.protoField(type.element, item, name)}), t = ${this.descriptor(type.element)}, ${shape} }`;
+  }
+
+  /** The integer as a hex field, with one masked field per bit field under it. */
+  private bitsEntry(type: BitsType, abbrev: string, name: string, base: string): string {
+    const size = PRIMITIVE_SIZES[type.base];
+    const constructor = FIELD_CONSTRUCTORS[type.base];
+    const bits = bitLayout(type.fields).map(({ field, offset }) => {
+      const head = `${luaString(uniqueName(`${base}.${snakeCase(field.name)}`, this.used))}, ${luaString(field.name)}`;
+      const mask = hex((2 ** field.bits - 1) * 2 ** offset, size * 2);
+      switch (field.type.kind) {
+        case 'bool':
+          return `{ pf = reg(ProtoField.bool(${head}, ${size * 8}, nil, ${mask})) }`;
+        case 'uint':
+          return `{ pf = reg(ProtoField.${constructor}(${head}, base.DEC, nil, ${mask})) }`;
+        case 'enum': {
+          const values = `ENUMS[${luaString(field.type.name)}]`;
+          return `{ pf = reg(ProtoField.${constructor}(${head}, base.DEC, ${values}, ${mask})), e = ${luaString(field.type.name)}, div = ${2 ** offset}, mod = ${2 ** field.bits} }`;
+        }
+      }
+    });
+    const pf = `ProtoField.${constructor}(${luaString(abbrev)}, ${name}, base.HEX)`;
+    return `{ pf = reg(${pf}), t = { k = "bits", size = ${size}, bits = {\n    ${bits.join(',\n    ')},\n  } } }`;
   }
 
   private protoField(type: ElementType, abbrev: string, name: string): string {
@@ -225,7 +251,26 @@ function luaString(value: string): string {
   return out + '"';
 }
 
-const RUNTIME = `local ABORT = {}
+const BITS_BRANCH = `
+  elseif kind == "bits" then
+    need(tree, tvb, off, t.size)
+    local range = tvb(off, t.size)
+    local raw = read_unsigned(tvb, off, t.size)
+    local item = add_number(tree, field, range)
+    -- Wireshark masks each bit field itself; enums are checked here, from the raw value.
+    for _, bit in ipairs(t.bits) do
+      local sub = add_number(item, bit.pf, range)
+      if bit.e then
+        local value = math.floor(raw / bit.div) % bit.mod
+        if ENUMS[bit.e][value] == nil then
+          sub:add_proto_expert_info(ef_enum, string.format("Unknown %s value: %d", bit.e, value))
+        end
+      end
+    end
+    return off + t.size`;
+
+function runtime(bits: boolean): string {
+  return `local ABORT = {}
 
 -- Stands in for the tree while trying a direction, so a wrong guess shows nothing.
 local sink = { problems = 0 }
@@ -314,7 +359,7 @@ local function dissect_value(field, t, tvb, off, tree, depth, label)
   elseif kind == "fixed" then
     need(tree, tvb, off, t.size)
     tree:add(field, tvb(off, t.size))
-    return off + t.size
+    return off + t.size${bits ? BITS_BRANCH : ''}
   end
   if depth >= MAX_DEPTH then
     fail(tree, ef_depth, "Structs are nested more than " .. MAX_DEPTH .. " levels deep")
@@ -492,3 +537,4 @@ register_ports()
 DissectorTable.get("tcp.port"):add_for_decode_as(proto)
 DissectorTable.get("udp.port"):add_for_decode_as(proto)
 `;
+}

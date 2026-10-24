@@ -11,3 +11,4 @@ export function loadProtocol(relativePath: string): Protocol {
 
 export const chatRoom = () => loadProtocol('../examples/chat-room.yaml');
 export const allTypes = () => loadProtocol('fixtures/all-types.yaml');
+export const bitFields = () => loadProtocol('fixtures/bit-fields.yaml');

@@ -244,4 +244,99 @@ packets:
 `;
     expect(errors(source)).toEqual(["3:3 struct 'A' contains itself (A -> B -> A)"]);
   });
+
+  it('resolves bit fields', () => {
+    const { protocol, diagnostics, locations } = compile(load('fixtures/bit-fields.yaml'));
+    expect(diagnostics).toEqual([]);
+    const status = protocol!.packets.find((p) => p.name === 'Status')!;
+    expect(status.fields[1]).toEqual({
+      name: 'state',
+      doc: 'Packed player state.',
+      type: {
+        kind: 'bits',
+        base: 'u16',
+        fields: [
+          { name: 'alive', bits: 1, type: { kind: 'bool' }, doc: 'False once the player is down.' },
+          { name: 'team', bits: 2, type: { kind: 'enum', name: 'Team' }, doc: undefined },
+          { name: 'level', bits: 7, type: { kind: 'uint' }, doc: undefined },
+          { name: 'mood', bits: 2, type: { kind: 'enum', name: 'Mood' }, doc: undefined },
+        ],
+      },
+    });
+    expect(locations!.get('packet:Status/field:state/bit:level')).toEqual({ line: 43, column: 21 });
+  });
+
+  it('checks bit field sizes, types and enum values', () => {
+    const source = `${header}enums:
+  E: { type: i8, values: { A: -1, B: 1 } }
+  F: { type: u8, values: { A: 0, B: 4 } }
+structs:
+  S:
+    fields:
+      - name: a
+        type: u8
+        bits:
+          - { name: x, bits: 0 }
+          - { name: y, type: bool, bits: 2 }
+          - { name: z }
+          - { name: w, type: F, bits: 2 }
+          - { name: v, type: E, bits: 2 }
+          - { name: u, type: u8, bits: 2 }
+          - { name: t, type: Bool }
+          - { name: s, type: S, bits: 1 }
+      - name: b
+        type: u8
+        bits:
+          - { name: p, bits: 5 }
+          - { name: q, bits: 4 }
+      - { name: c, type: 'u8[]', bits: [{ name: r, bits: 1 }] }
+      - { name: d, type: u64, bits: [{ name: o, bits: 1 }] }
+      - { name: e, type: u8, length: u8, bits: [{ name: n, bits: 1 }] }
+      - { name: f, type: u8, bits: [] }
+      - { name: g, type: u8, bits: { name: m } }
+      - { name: h, type: u8, bits: [{ name: _1st, bits: 1, size: 2 }] }
+`;
+    expect(errors(source)).toEqual([
+      "11:30 'bits' of bit field 'x' must be greater than 0",
+      '12:42 a bool bit field takes exactly 1 bit',
+      "13:13 bit field 'z' is missing 'bits'",
+      "14:39 enum 'F' value 'B' (4) does not fit in 2 bits (0..3)",
+      "15:39 enum 'E' value 'A' (-1) does not fit in 2 bits (0..3)",
+      "16:30 bit field type must be bool or an enum; leave out 'type' for an unsigned integer",
+      "17:30 unknown type 'Bool'; did you mean 'bool'?",
+      "18:30 bit field type must be bool or an enum; leave out 'type' for an unsigned integer",
+      '20:15 bit fields take 9 bits, more than the 8 bits of u8',
+      '24:26 bit fields cannot be arrays; wrap them in a struct and use an array of the struct',
+      '25:26 bit fields must be stored in one of: u8, u16, u32',
+      "26:30 'length' does not apply to bit fields",
+      "27:36 'bits' must list at least one field",
+      "28:36 'bits' must be a list",
+      "29:45 bit field name '_1st' must start with a letter once leading underscores are dropped for camelCase",
+      "29:60 unknown key 'size' in bit field; expected one of: name, type, bits, doc",
+    ]);
+  });
+
+  it('keeps bit field names apart from each other and from the fields around them', () => {
+    const source = `${header}packets:
+  - name: P
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: room_id, type: u8 }
+      - name: flags
+        type: u16
+        bits:
+          - { name: roomId, bits: 1 }
+          - { name: flags, bits: 1 }
+          - { name: ok, type: bool }
+          - { name: ok, type: bool }
+      - { name: o_k, type: u8 }
+`;
+    expect(errors(source)).toEqual([
+      "11:21 field 'roomId' clashes with 'room_id' once converted to camelCase",
+      "12:21 duplicate field 'flags'",
+      "14:21 duplicate field 'ok'",
+      "15:17 field 'o_k' clashes with 'ok' once converted to camelCase",
+    ]);
+  });
 });

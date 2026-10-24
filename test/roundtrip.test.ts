@@ -5,8 +5,15 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { defaultJavaPackage, generateJava } from '../src/gen/java.js';
 import { pascalCase } from '../src/gen/common.js';
-import { findEnum, findStruct, type FieldType, type Protocol } from '../src/model.js';
-import { allTypes, chatRoom } from './helpers.js';
+import {
+  bitMember,
+  findEnum,
+  findStruct,
+  type Field,
+  type MemberType,
+  type Protocol,
+} from '../src/model.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 const hasJava = spawnSync('javac', ['-version']).status === 0;
 if (!hasJava && process.env.PKTSPEC_REQUIRE_JAVA) {
@@ -29,8 +36,20 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
   bool: { max: 'true', min: 'false' },
 };
 
+/** Constructor arguments for the fields; a bit field group gives one per bit field. */
+function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  return fields.flatMap((field) => {
+    if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
+    return field.type.fields.map((bit) => {
+      if (bit.type.kind !== 'uint') return sample(protocol, bitMember(bit).type, variant, depth);
+      const value = variant === 'max' ? 2 ** bit.bits - 1 : 0;
+      return bit.bits <= 8 ? `(short) ${value}` : bit.bits <= 16 ? `${value}` : `${value}L`;
+    });
+  });
+}
+
 /** Builds a Java expression holding an edge-case value of the given type. */
-function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0): string {
+function sample(protocol: Protocol, type: MemberType, variant: Variant, depth = 0): string {
   switch (type.kind) {
     case 'primitive':
       return PRIMITIVE_SAMPLES[type.name]![variant];
@@ -49,7 +68,7 @@ function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0
     }
     case 'struct': {
       const fields = findStruct(protocol, type.name).fields;
-      const args = fields.map((f) => sample(protocol, f.type, variant, depth + 1));
+      const args = samples(protocol, fields, variant, depth + 1);
       return `new ${type.name}(${args.join(', ')})`;
     }
     case 'array': {
@@ -73,11 +92,12 @@ function driver(protocol: Protocol, javaPackage: string): string {
   const entry = `${pascalCase(protocol.name)}Protocol`;
   const checks = protocol.packets.flatMap((packet) =>
     (['max', 'min'] as const).map((variant) => {
-      const args = packet.fields.map((f) => sample(protocol, f.type, variant));
+      const args = samples(protocol, packet.fields, variant);
       const fromClient = packet.direction === 'c2s';
       return `        check(new ${packet.name}(${args.join(', ')}), ${fromClient});`;
     }),
   );
+  if (protocol.name === 'bit_fields') checks.push(...bitFieldChecks());
   return `package ${javaPackage};
 
 import java.nio.ByteBuffer;
@@ -104,6 +124,15 @@ ${checks.join('\n')}
         System.out.println(name + " " + hex(data));
     }
 
+    static void throwsIllegal(Runnable action, String message) {
+        try {
+            action.run();
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        throw new AssertionError(message + ": IllegalArgumentException was not thrown");
+    }
+
     static String hex(byte[] data) {
         StringBuilder out = new StringBuilder();
         for (byte b : data) {
@@ -119,6 +148,20 @@ ${checks.join('\n')}
     }
 }
 `;
+}
+
+/** Range checks on write, unknown enum values in bits on read, and ignored unused bits. */
+function bitFieldChecks(): string[] {
+  const status = (level: string, low: string) =>
+    `new Status((short) 0, false, Team.RED, ${level}, Mood.CALM, ${low}, false)`;
+  return [
+    `throwsIllegal(() -> ${status('(short) 128', '0L')}.encode(), "level too large");`,
+    `throwsIllegal(() -> ${status('(short) -1', '0L')}.encode(), "level negative");`,
+    `throwsIllegal(() -> ${status('(short) 0', '0x80000000L')}.encode(), "low too large");`,
+    'throwsIllegal(() -> BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 0, 0, 0, 0, 0, 0}), "mood 0");',
+    'throwsIllegal(() -> BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 6, 4, 0, 0, 0, 0}), "team 3");',
+    `expect(${status('(short) 0', '0L')}.equals(BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 0, (byte) 0x84, 0, 0, 0, 0})), "unused bits");`,
+  ].map((check) => `        ${check}`);
 }
 
 const workDirs: string[] = [];
@@ -160,6 +203,14 @@ describe.skipIf(!hasJava)('Java round trip', () => {
     // Little-endian u16 opcode 0x0003, u32 room id, then a u16-prefixed UTF-8 string.
     expect(lines).toContain('Say 0300ffffffff1000e8818ae5a4a920726f6f6d20f09f9880');
     expect(lines).toContain('Say 0300000000000000');
+  }, 60_000);
+
+  it('packs bit fields into their integer', () => {
+    const lines = runRoundTrip(bitFields());
+    // Status: u8 seq, then u16 and u32 bit fields in little-endian order.
+    expect(lines).toContain('Status 01fffd0fffffffff');
+    expect(lines).toContain('Status 0100000400000000');
+    expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
   }, 60_000);
 
   it('encodes and decodes every type in big-endian order', () => {

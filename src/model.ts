@@ -5,6 +5,7 @@ export type LengthType = 'u8' | 'u16' | 'u32';
 export type IntType = 'u8' | 'u16' | 'u32' | 'u64' | 'i8' | 'i16' | 'i32' | 'i64';
 export type EnumBaseType = 'u8' | 'u16' | 'u32' | 'i8' | 'i16' | 'i32';
 export type PrimitiveType = IntType | 'f32' | 'f64' | 'bool';
+export type BitsBaseType = 'u8' | 'u16' | 'u32';
 
 export type ElementType =
   | { kind: 'primitive'; name: PrimitiveType }
@@ -17,11 +18,33 @@ export type ElementType =
 export type FieldType =
   | ElementType
   | { kind: 'array'; element: ElementType; length: LengthType }
-  | { kind: 'fixedArray'; element: ElementType; size: number };
+  | { kind: 'fixedArray'; element: ElementType; size: number }
+  | { kind: 'bits'; base: BitsBaseType; fields: BitField[] };
+
+export type BitsType = Extract<FieldType, { kind: 'bits' }>;
+
+/** Any field type except a group of bit fields; what a generated member can hold. */
+export type MemberType = Exclude<FieldType, { kind: 'bits' }>;
+
+export type BitFieldType = { kind: 'uint' } | { kind: 'bool' } | { kind: 'enum'; name: string };
+
+/** One field packed into a bit field integer; the first one takes the lowest bits. */
+export interface BitField {
+  name: string;
+  bits: number;
+  type: BitFieldType;
+  doc?: string;
+}
 
 export interface Field {
   name: string;
   type: FieldType;
+  doc?: string;
+}
+
+export interface MemberField {
+  name: string;
+  type: MemberType;
   doc?: string;
 }
 
@@ -112,6 +135,8 @@ export function wireSize(type: FieldType, protocol: Protocol): WireSize {
       const element = wireSize(type.element, protocol);
       return { min: element.min * type.size, fixed: element.fixed };
     }
+    case 'bits':
+      return { min: PRIMITIVE_SIZES[type.base], fixed: true };
   }
 }
 
@@ -136,4 +161,61 @@ export function findEnum(protocol: Protocol, name: string): Enum {
   const found = protocol.enums.find((e) => e.name === name);
   if (!found) throw new Error(`unknown enum ${name}`);
   return found;
+}
+
+/** Each bit field with the position of its lowest bit, counted from the least significant bit. */
+export function bitLayout(fields: BitField[]): { field: BitField; offset: number }[] {
+  let offset = 0;
+  return fields.map((field) => {
+    const placed = { field, offset };
+    offset += field.bits;
+    return placed;
+  });
+}
+
+/** The type a bit field has in generated code: the smallest unsigned integer that holds it. */
+function bitMemberType(field: BitField): ElementType {
+  switch (field.type.kind) {
+    case 'bool':
+      return { kind: 'primitive', name: 'bool' };
+    case 'enum':
+      return { kind: 'enum', name: field.type.name };
+    case 'uint':
+      return { kind: 'primitive', name: field.bits <= 8 ? 'u8' : field.bits <= 16 ? 'u16' : 'u32' };
+  }
+}
+
+/** Every group of bit fields in the structs and packets. */
+export function bitGroups(protocol: Protocol): BitsType[] {
+  return [...protocol.structs, ...protocol.packets].flatMap(({ fields }) =>
+    fields.flatMap(({ type }) => (type.kind === 'bits' ? [type] : [])),
+  );
+}
+
+/** Names of the enums held in bit fields, which need a check that takes the value itself. */
+export function bitEnums(protocol: Protocol): Set<string> {
+  return new Set(
+    bitGroups(protocol).flatMap((group) =>
+      group.fields.flatMap(({ type }) => (type.kind === 'enum' ? [type.name] : [])),
+    ),
+  );
+}
+
+const bitMembers = new WeakMap<BitField, MemberField>();
+
+/** The bit field as a plain field; the same object comes back every time, so it can key a map. */
+export function bitMember(bit: BitField): MemberField {
+  let member = bitMembers.get(bit);
+  if (!member) {
+    member = { name: bit.name, type: bitMemberType(bit), doc: bit.doc };
+    bitMembers.set(bit, member);
+  }
+  return member;
+}
+
+/** The fields as generated code exposes them, with each bit field group replaced by its members. */
+export function memberFields(fields: Field[]): MemberField[] {
+  return fields.flatMap((field) =>
+    field.type.kind === 'bits' ? field.type.fields.map(bitMember) : [field as MemberField],
+  );
 }

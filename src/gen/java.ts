@@ -1,11 +1,17 @@
 import {
   PRIMITIVE_SIZES,
+  bitGroups,
+  bitLayout,
   findEnum,
+  memberFields,
   wireSize,
+  type BitsType,
   type ElementType,
   type Enum,
   type Field,
   type FieldType,
+  type MemberField,
+  type MemberType,
   type Packet,
   type PrimitiveType,
   type Protocol,
@@ -78,6 +84,16 @@ const BUFFER_METHODS: Partial<Record<PrimitiveType, string>> = {
 };
 
 const INDENT = '    ';
+
+const CHECK_BITS = `    static long checkBits(long value, int bits, String field) {
+        if (value < 0 || value >= 1L << bits) {
+            throw new IllegalArgumentException(
+                    field + " out of range for " + bits + " bits: " + value);
+        }
+        return value;
+    }
+
+`;
 
 export function defaultJavaPackage(protocolName: string): string {
   return protocolName.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -209,7 +225,7 @@ final class ${this.codec} {
         return buf.getInt() & 0xFFFFFFFFL;
     }
 
-    static void writeBool(ByteBuffer buf, boolean value) {
+${bitGroups(this.protocol).length > 0 ? CHECK_BITS : ''}    static void writeBool(ByteBuffer buf, boolean value) {
         buf.put(value ? (byte) 1 : (byte) 0);
     }
 
@@ -439,12 +455,13 @@ ${constants};
   ): string {
     const members: string[] = [];
     const opcodeDigits = this.protocol.opcode === 'u8' ? 2 : 4;
+    const exposed = memberFields(fields);
     if (packet) {
       members.push(`    public static final int OPCODE = ${hex(packet.opcode, opcodeDigits)};`);
     }
-    if (fields.length > 0) {
+    if (exposed.length > 0) {
       members.push(
-        fields
+        exposed
           .map((field) => {
             const initializer = this.defaultValue(field.type);
             const declaration = `public ${this.javaType(field.type)} ${fieldName(field.name)}`;
@@ -456,7 +473,7 @@ ${constants};
           .join('\n'),
       );
     }
-    members.push(this.constructors(name, fields));
+    members.push(this.constructors(name, exposed));
     if (packet) {
       members.push(`    @Override
     public int opcode() {
@@ -466,9 +483,9 @@ ${constants};
     members.push(this.sizeMethod(fields, packet !== undefined));
     members.push(this.writeMethod(fields, packet !== undefined));
     members.push(this.readMethod(name, fields));
-    members.push(this.equalsMethod(name, fields));
-    members.push(this.hashCodeMethod(fields));
-    members.push(this.toStringMethod(name, fields));
+    members.push(this.equalsMethod(name, exposed));
+    members.push(this.hashCodeMethod(exposed));
+    members.push(this.toStringMethod(name, exposed));
 
     const direction = packet?.direction === 'c2s' ? 'client to server' : 'server to client';
     const opcodeDoc = packet
@@ -485,7 +502,7 @@ ${constants};
     );
   }
 
-  private constructors(name: string, fields: Field[]): string {
+  private constructors(name: string, fields: MemberField[]): string {
     const empty = `    public ${name}() {}`;
     if (fields.length === 0) return empty;
     const parameters = fields.map((f) => `${this.javaType(f.type)} ${fieldName(f.name)}`);
@@ -536,7 +553,7 @@ ${constants};
     return `${doc}    ${method} {\n${body}    }`;
   }
 
-  private variableSize(type: ElementType, value: string): string {
+  private variableSize(type: FieldType, value: string): string {
     switch (type.kind) {
       case 'string':
         return `${this.codec}.stringSize(${value}, ${PRIMITIVE_SIZES[type.length]})`;
@@ -554,6 +571,7 @@ ${constants};
       const name = fieldName(field.name);
       const value = `this.${name}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.writeBits(type, `${name}Bits`);
       if (type.kind !== 'array' && type.kind !== 'fixedArray') {
         return [`${this.write(type, value, name)};`];
       }
@@ -577,6 +595,26 @@ ${constants};
      */
 `;
     return `${doc}    public void writeTo(ByteBuffer buf) {\n${indentLines(statements)}    }`;
+  }
+
+  private writeBits(type: BitsType, local: string): string[] {
+    const statements = [`long ${local} = 0;`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const name = fieldName(field.name);
+      const shift = offset === 0 ? '' : ` << ${offset}`;
+      if (field.type.kind === 'bool') {
+        const bit = `this.${name} ? 1L : 0L`;
+        statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
+        continue;
+      }
+      const value = field.type.kind === 'enum' ? `this.${name}.value()` : `this.${name}`;
+      statements.push(
+        `${local} |= ${this.codec}.checkBits(${value}, ${field.bits}, ${javaString(name)})${shift};`,
+      );
+    }
+    const wide = type.base === 'u32' ? local : `(int) ${local}`;
+    statements.push(`${this.writePrimitive(type.base, wide)};`);
+    return statements;
   }
 
   private write(type: ElementType, value: string, field: string): string {
@@ -616,6 +654,7 @@ ${constants};
     const statements = fields.flatMap((field) => {
       const target = `result.${fieldName(field.name)}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.readBits(type, `${fieldName(field.name)}Bits`);
       if (type.kind === 'array') {
         const count = `${fieldName(field.name)}Count`;
         return [
@@ -645,6 +684,27 @@ ${constants};
         ${name} result = new ${name}();
 ${indentLines(statements)}        return result;
     }`;
+  }
+
+  private readBits(type: BitsType, local: string): string[] {
+    const statements = [`long ${local} = ${this.readPrimitive(type.base)};`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const target = `result.${fieldName(field.name)}`;
+      const mask = `${hex(2 ** field.bits - 1)}L`;
+      const bits = offset === 0 ? `${local} & ${mask}` : `${local} >>> ${offset} & ${mask}`;
+      if (field.type.kind === 'bool') {
+        statements.push(`${target} = (${bits}) != 0;`);
+      } else if (field.type.kind === 'enum') {
+        const wide = findEnum(this.protocol, field.type.name).type === 'u32';
+        statements.push(
+          `${target} = ${field.type.name}.fromValue(${wide ? bits : `(int) (${bits})`});`,
+        );
+      } else {
+        const cast = field.bits <= 8 ? '(short) ' : field.bits <= 16 ? '(int) ' : '';
+        statements.push(`${target} = ${cast ? `${cast}(${bits})` : bits};`);
+      }
+    }
+    return statements;
   }
 
   private read(type: ElementType): string {
@@ -677,7 +737,7 @@ ${indentLines(statements)}        return result;
     }
   }
 
-  private equalsMethod(name: string, fields: Field[]): string {
+  private equalsMethod(name: string, fields: MemberField[]): string {
     if (fields.length === 0) {
       return `    @Override
     public boolean equals(Object o) {
@@ -712,7 +772,7 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
-  private hashCodeMethod(fields: Field[]): string {
+  private hashCodeMethod(fields: MemberField[]): string {
     const values = fields.map((field) => {
       const n = fieldName(field.name);
       const isBytes = field.type.kind === 'bytes' || field.type.kind === 'fixedBytes';
@@ -725,7 +785,7 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
-  private toStringMethod(name: string, fields: Field[]): string {
+  private toStringMethod(name: string, fields: MemberField[]): string {
     const parts = fields.map((field, index) => {
       const n = fieldName(field.name);
       const isBytes = field.type.kind === 'bytes' || field.type.kind === 'fixedBytes';
@@ -742,7 +802,7 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
-  private javaType(type: FieldType, boxed = false): string {
+  private javaType(type: MemberType, boxed = false): string {
     switch (type.kind) {
       case 'primitive':
         return boxed ? PRIMITIVE_JAVA[type.name].boxed : PRIMITIVE_JAVA[type.name].type;
@@ -760,7 +820,7 @@ ${indentLines(statements)}        return result;
     }
   }
 
-  private defaultValue(type: FieldType): string | undefined {
+  private defaultValue(type: MemberType): string | undefined {
     switch (type.kind) {
       case 'primitive':
         return undefined;

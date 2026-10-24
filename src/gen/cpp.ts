@@ -1,13 +1,21 @@
 import {
   PRIMITIVE_SIZES,
+  bitEnums,
+  bitGroups,
+  bitLayout,
+  bitMember,
   findEnum,
   findStruct,
+  memberFields,
   wireSize,
+  type BitsType,
   type ElementType,
   type Enum,
   type EnumBaseType,
   type Field,
   type FieldType,
+  type MemberField,
+  type MemberType,
   type Packet,
   type PrimitiveType,
   type Protocol,
@@ -122,6 +130,17 @@ const WIRE_NAMES: Record<PrimitiveType, string> = {
 
 const INDENT = '    ';
 
+const CHECK_BITS = `
+// Throws PacketRangeError if the value of a bit field does not fit in its bits.
+inline std::uint32_t checkBits(std::uint32_t value, unsigned bits, const char* field) {
+    if (bits < 32 && (value >> bits) != 0) {
+        throw PacketRangeError(std::string(field) + " out of range for " + std::to_string(bits) +
+                               " bits: " + std::to_string(value));
+    }
+    return value;
+}
+`;
+
 // Editors treat NEL, LS and PS as line breaks too, so each doc line needs its own comment prefix.
 const LINE_BREAKS = new RegExp('\r\n|[\r\n' + String.fromCharCode(0x85, 0x2028, 0x2029) + ']');
 
@@ -159,8 +178,8 @@ interface Message {
 class CppGenerator {
   private readonly prefix: string;
   private readonly protocolClass: string;
-  private readonly memberNames = new Map<Field, string>();
-  private readonly paramNames = new Map<Field, string>();
+  private readonly memberNames = new Map<MemberField, string>();
+  private readonly paramNames = new Map<MemberField, string>();
   private readonly enumMembers = new Map<string, string[]>();
 
   constructor(
@@ -185,7 +204,8 @@ class CppGenerator {
         definition.values.map((v) => uniqueName(enumMemberName(v.name), used)),
       );
     }
-    for (const { fields } of [...protocol.structs, ...protocol.packets]) {
+    for (const { fields: declared } of [...protocol.structs, ...protocol.packets]) {
+      const fields = memberFields(declared);
       const used = new Set(RESERVED_MEMBERS);
       for (const field of fields) {
         this.memberNames.set(
@@ -221,7 +241,7 @@ class CppGenerator {
     ];
   }
 
-  private member(field: Field): string {
+  private member(field: MemberField): string {
     return this.memberNames.get(field)!;
   }
 
@@ -581,11 +601,12 @@ private:
   private packetBase(): string {
     const opcodeSize = PRIMITIVE_SIZES[this.protocol.opcode];
     const opcodeMethod = WIRE_NAMES[this.protocol.opcode];
+    const bits = bitGroups(this.protocol).length > 0;
     return this.file(
-      ['<array>', '<cstddef>', '<cstdint>', '<vector>'],
+      ['<array>', '<cstddef>', '<cstdint>', ...(bits ? ['<string>'] : []), '<vector>'],
       ['PacketErrors.hpp', 'PacketReader.hpp', 'PacketWriter.hpp'],
       `namespace detail {
-
+${bits ? CHECK_BITS : ''}
 // Equality that treats two NaN values as equal, so a decoded packet equals the one that was sent.
 template <typename T>
 bool same(const T& a, const T& b) {
@@ -741,6 +762,20 @@ ${decoder('s2c', 'decodeFromServer', 'server')}
     const cases = values
       .map((v) => `${INDENT}${INDENT}case ${intLiteral(v, definition.type)}:`)
       .join('\n');
+    const bitCases = values.map((v) => `${INDENT}${INDENT}case ${v}u:`).join('\n');
+    const fromBits = bitEnums(this.protocol).has(definition.name)
+      ? `
+
+/** Checks a value taken from a bit field, throwing UnknownEnumValueError if ${definition.name} does not define it. */
+inline ${definition.name} bitsTo${definition.name}(std::uint32_t value) {
+    switch (value) {
+${bitCases}
+            return static_cast<${definition.name}>(value);
+        default:
+            throw UnknownEnumValueError("${definition.name}", value);
+    }
+}`
+      : '';
     return this.file(
       ['<cstdint>'],
       ['PacketReader.hpp'],
@@ -757,7 +792,7 @@ ${cases}
         default:
             throw UnknownEnumValueError("${definition.name}", value);
     }
-}`,
+}${fromBits}`,
     );
   }
 
@@ -826,7 +861,7 @@ ${cases}
       if (type.kind === 'struct') headers.add('Structs.hpp');
       if (type.kind === 'enum') headers.add(`${type.name}.hpp`);
     };
-    for (const { type } of fields) {
+    for (const { type } of memberFields(fields)) {
       visit(type.kind === 'array' || type.kind === 'fixedArray' ? type.element : type);
     }
     return [...headers];
@@ -856,14 +891,15 @@ ${cases}
   ): Message {
     const members: string[] = [];
     const opcodeDigits = this.protocol.opcode === 'u8' ? 2 : 4;
+    const exposed = memberFields(fields);
     if (packet) {
       members.push(
         `${INDENT}static constexpr ${this.opcodeType()} OpcodeValue = ${hex(packet.opcode, opcodeDigits)};`,
       );
     }
-    if (fields.length > 0) {
+    if (exposed.length > 0) {
       members.push(
-        fields
+        exposed
           .map((field) => {
             const declaration = `${this.cppType(field.type)} ${this.member(field)}`;
             return (
@@ -873,10 +909,10 @@ ${cases}
           .join('\n'),
       );
     }
-    const params = fields.map((f) => `${this.cppType(f.type)} ${this.paramNames.get(f)!}`);
+    const params = exposed.map((f) => `${this.cppType(f.type)} ${this.paramNames.get(f)!}`);
     const constructors = [`${INDENT}${name}() = default;`];
-    if (fields.length > 0) {
-      const explicit = fields.length === 1 ? 'explicit ' : '';
+    if (exposed.length > 0) {
+      const explicit = exposed.length === 1 ? 'explicit ' : '';
       const signature = `${INDENT}${explicit}${name}(${params.join(', ')});`;
       constructors.push(
         signature.length <= 100
@@ -915,16 +951,16 @@ ${cases}
     const declaration = `${cppDoc(classDoc, '')}struct ${name}${bases} {\n${members.join('\n\n')}\n};`;
 
     const definitions = [
-      ...(fields.length > 0 ? [this.constructorDefinition(name, fields, params)] : []),
+      ...(exposed.length > 0 ? [this.constructorDefinition(name, exposed, params)] : []),
       this.sizeDefinition(name, sizeName, fields),
       this.writeDefinition(name, fields),
       this.readDefinition(name, fields),
-      this.equalsDefinition(name, fields),
+      this.equalsDefinition(name, exposed),
     ];
     return { declaration, definitions: definitions.join('\n\n') };
   }
 
-  private constructorDefinition(name: string, fields: Field[], params: string[]): string {
+  private constructorDefinition(name: string, fields: MemberField[], params: string[]): string {
     const initializers = fields.map((field) => {
       const argument = this.paramNames.get(field)!;
       const { type } = field;
@@ -947,12 +983,14 @@ ${cases}
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const value = `this->${this.member(field)}`;
       const { type } = field;
       const size = wireSize(type, this.protocol);
       if (size.fixed) {
         fixed += size.min;
-      } else if (type.kind === 'array' || type.kind === 'fixedArray') {
+        continue;
+      }
+      const value = `this->${this.member(field as MemberField)}`;
+      if (type.kind === 'array' || type.kind === 'fixedArray') {
         const element = wireSize(type.element, this.protocol);
         fixed += type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
         if (element.fixed) {
@@ -976,7 +1014,7 @@ ${cases}
     return `inline std::size_t ${name}::${method}() const {\n${body}}`;
   }
 
-  private variableSize(type: ElementType, value: string): string {
+  private variableSize(type: FieldType, value: string): string {
     switch (type.kind) {
       case 'string':
       case 'bytes':
@@ -990,8 +1028,9 @@ ${cases}
 
   private writeDefinition(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const value = `this->${this.member(field)}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.writeBits(type, `${camelCase(field.name)}Bits`);
+      const value = `this->${this.member(field as MemberField)}`;
       if (type.kind !== 'array' && type.kind !== 'fixedArray') {
         return [`${this.write(type, value)};`];
       }
@@ -1006,6 +1045,31 @@ ${cases}
     });
     const parameter = fields.length === 0 ? 'PacketWriter&' : 'PacketWriter& writer';
     return `inline void ${name}::writeTo(${parameter}) const {\n${indentLines(statements)}}`;
+  }
+
+  private writeBits(type: BitsType, local: string): string[] {
+    const statements = [`std::uint32_t ${local} = 0;`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const member = this.member(bitMember(field));
+      const shift = offset === 0 ? '' : ` << ${offset}`;
+      if (field.type.kind === 'bool') {
+        const bit = `this->${member} ? 1u : 0u`;
+        statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
+        continue;
+      }
+      // Converting a negative enum value wraps around, so the check still rejects it.
+      const value =
+        field.type.kind === 'enum'
+          ? `static_cast<std::uint32_t>(this->${member})`
+          : `this->${member}`;
+      statements.push(
+        `${local} |= detail::checkBits(${value}, ${field.bits}, ${cppString(member)})${shift};`,
+      );
+    }
+    const value =
+      type.base === 'u32' ? local : `static_cast<${PRIMITIVE_CPP[type.base]}>(${local})`;
+    statements.push(`writer.write${WIRE_NAMES[type.base]}(${value});`);
+    return statements;
   }
 
   private write(type: ElementType, value: string): string {
@@ -1032,9 +1096,10 @@ ${cases}
       return `inline ${name} ${name}::readFrom(PacketReader&) {\n${INDENT}return ${name}();\n}`;
     }
     const statements = fields.flatMap((field) => {
-      const member = this.member(field);
-      const target = `result.${member}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.readBits(type, `${camelCase(field.name)}Bits`);
+      const member = this.member(field as MemberField);
+      const target = `result.${member}`;
       if (type.kind === 'array') {
         const count = `${member}Count`;
         return [
@@ -1060,6 +1125,26 @@ ${indentLines(statements)}${INDENT}return result;
 }`;
   }
 
+  private readBits(type: BitsType, local: string): string[] {
+    const statements = [`const std::uint32_t ${local} = reader.read${WIRE_NAMES[type.base]}();`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const target = `result.${this.member(bitMember(field))}`;
+      const shifted = offset === 0 ? local : `(${local} >> ${offset})`;
+      const bits = `${shifted} & ${hex(2 ** field.bits - 1)}u`;
+      if (field.type.kind === 'bool') {
+        statements.push(`${target} = (${bits}) != 0;`);
+      } else if (field.type.kind === 'enum') {
+        statements.push(`${target} = bitsTo${field.type.name}(${bits});`);
+      } else if (field.bits > 16) {
+        statements.push(`${target} = ${bits};`);
+      } else {
+        const cast = PRIMITIVE_CPP[field.bits > 8 ? 'u16' : 'u8'];
+        statements.push(`${target} = static_cast<${cast}>(${bits});`);
+      }
+    }
+    return statements;
+  }
+
   private read(type: ElementType): string {
     switch (type.kind) {
       case 'primitive':
@@ -1077,7 +1162,7 @@ ${indentLines(statements)}${INDENT}return result;
     }
   }
 
-  private equalsDefinition(name: string, fields: Field[]): string {
+  private equalsDefinition(name: string, fields: MemberField[]): string {
     if (fields.length === 0) {
       return `inline bool ${name}::operator==(const ${name}&) const {\n${INDENT}return true;\n}`;
     }
@@ -1095,7 +1180,7 @@ ${INDENT}return ${comparisons.join(`\n${INDENT}${INDENT}&& `)};
 }`;
   }
 
-  private cppType(type: FieldType): string {
+  private cppType(type: MemberType): string {
     switch (type.kind) {
       case 'primitive':
         return PRIMITIVE_CPP[type.name];
@@ -1116,7 +1201,7 @@ ${INDENT}return ${comparisons.join(`\n${INDENT}${INDENT}&& `)};
   }
 
   // Value-initialization gives zero, which an enum may not define, so enums start at their first value.
-  private initializer(declaration: string, type: FieldType): string {
+  private initializer(declaration: string, type: MemberType): string {
     if (type.kind === 'enum') {
       return `${declaration}{${type.name}::${this.enumMembers.get(type.name)![0]}}`;
     }

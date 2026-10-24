@@ -49,9 +49,23 @@
 - 輸出目錄已有 `manifest.json` 時先刪舊的 `valid/`、`invalid/`。
 - 測試：`test/fuzz.test.ts`（決定性、邊界位元組、無效標籤、上限選項）、`test/roundtrip-fuzz.test.ts`（TypeScript、Java、C#、C++ 解碼器吃整份語料：有效的解開且重新編碼位元組不變，無效的丟出標的錯誤；Java、C#、C++ 的略過與 `PKTSPEC_REQUIRE_*` 規則同往返測試）、`test/cli.test.ts`。Wireshark 沒有跑語料。
 
+- 位元欄位：欄位加 `bits` 清單，`type` 是底層整數（`u8`／`u16`／`u32`，照協定 endian 讀寫）；子欄位 `{ name, type?, bits? }`，`type` 省略是無號整數、`bool` 固定 1 位元、列舉要寫 `bits`。從最低位元開始排，總和不得超過底層寬度，剩下的位元寫 0、讀時忽略。模型是 `FieldType` 多一種 `{ kind: 'bits', base, fields }`；`memberFields()` 把群組攤平成一般成員給產生器用（`MemberField`、`MemberType` 排除 `bits`，型別系統保證成員不會是群組），`bitLayout()` 給位移。
+- 選語法時把群組當成一個有名稱的欄位，而不是讓子欄位直接平鋪在 `fields`：底層整數的寬度、未使用的位元、文件與 Wireshark 的父節點、`diff` 的比對單位都需要一個名字。群組名稱和子欄位、同層欄位共用命名空間（`check` 一起比對 camelCase 後的名稱），產生的程式碼裡不出現群組名稱。
+- `check`：位元數至少 1、`bool` 只能 1 位元、總和不超過底層寬度、列舉的每個值都要在 0 到 2^bits - 1（所以負值列舉不能放）、子欄位型別只能是 `bool` 或列舉、底層型別只能是 `u8`／`u16`／`u32`、不能和 `length`／`size` 一起用、不能是陣列。列舉先於結構與封包解析，所以子欄位能檢查列舉值。
+- 成員型別：無號子欄位用放得下的最小無號型別（≤8 位元當 `u8`、≤16 當 `u16`、其餘 `u32`），所以 Java 的 7 位元是 `short`、C# 是 `byte`。各語言都用一個區域變數組合整數再寫出：Java `long`、C# `uint`、C++ `std::uint32_t`、TypeScript `number`（位元運算是有號 32 位元，`u32` 寫出前 `>>> 0`，讀取時碰到第 31 位元的子欄位不再做遮罩）。
+- 範圍錯誤：各語言的 codec 多一個 `checkBits`，只在協定有位元欄位時產生（沒有位元欄位的協定 golden 不變）：Java 丟 `IllegalArgumentException`、C# `ArgumentException`、TypeScript `RangeError`、C++ `PacketRangeError`。C# 與 C++ 列舉可以強制轉型成任意值，所以列舉子欄位也過一次檢查（負值轉成無號後必定超出）；TypeScript 同理；Java 列舉值在 `check` 已保證放得下，但為了統一也走 `checkBits`。
+- 解碼列舉子欄位：Java 沿用 `fromValue`；TypeScript、C#、C++ 為位元欄位用到的列舉多產生 `bitsTo<Enum>`（吃數值而不是讀取器），錯誤類別與一般列舉欄位相同。
+- Wireshark：群組是十六進位的整數欄位，子欄位是同寬度、帶遮罩的 `ProtoField`（`bool` 用 `ProtoField.bool` 加位元寬度），名稱和一般欄位一樣是 `協定.封包.子欄位`。列舉值的檢查在 Lua 端用 `math.floor(raw / div) % mod`，不依賴 `bit32` 或 5.3 的位元運算子。執行期的 `bits` 分支同樣只在用到時產生。
+- 文件：欄位表的型別寫 `u16 bit fields`，表後另有一張位元範圍表（`1–2` 這種寫法，包含未使用的位元範圍）。
+- `diff`：子欄位先依名稱配對，再依位置配對改名。位元數改變（`bit-field-resized`）、位置改變含順序（`bit-field-moved`）、型別改變（`bit-field-type-changed`）、移除（`bit-field-removed`）都是 breaking；改名、doc 是 info。新增子欄位：落在舊版未使用的高位元是 compatible，理由是舊版寫入時那些位元必定是 0、讀取時忽略，新版讀舊資料得到 0，雙方都不會失敗；例外是沒有 0 值的列舉，新版讀舊資料會丟錯，算 breaking；佔到舊版已用位元的也是 breaking。移除不對稱地算 breaking：舊版的程式還在讀那幾個位元，卻只會收到 0，語意被默默改掉。只被位元欄位用到的列舉，底層型別改變不影響線上格式，降為 info。
+- `fuzz`：有效樣本逐一把子欄位換成最大值（`bool` 為 true、列舉每個值），0 由 `zero` 樣本涵蓋；未使用的位元一律為 0（解碼會忽略、重新編碼寫 0，非 0 的樣本既不是有效也不會丟錯，所以不產生）。無效樣本 `unknown_enum` 多了列舉子欄位：在位元數放得下的範圍內取沒有成員使用的最大與最小值，放不下任何未使用值時不產生。
+- 測試：`test/fixtures/bit-fields.yaml`（三種寬度、沒有 0 值且底層為 `i16` 的列舉、佔滿 32 位元、第 31 位元、結構裡的位元欄位與結構陣列）；`compile.test.ts` 的錯誤訊息；各產生器 golden；Java、C#、TypeScript、C++ 往返（已知位元組、超出位元數的範圍錯誤、未知列舉值、未使用位元被忽略）；Wireshark 用 tshark 比對遮罩欄位、列舉專家資訊與截斷；fuzz 單元測試與四種解碼器的語料交叉驗證；`diff.test.ts` 每條規則。另外手動用 g++ `-std=c++20 -Wshadow -Wconversion -Wsign-conversion` 與 MSVC `/W4 /WX` 編譯過產生的標頭。
+
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
+- 位元欄位不能當陣列元素（每個元素要攤平成多個成員，各語言都得另造一個型別），請包成結構再用結構陣列。底層只有 `u8`／`u16`／`u32`，子欄位只有無號整數、`bool`、非負值的列舉，沒有有號子欄位。
+- 位元欄位未使用的位元解碼時不檢查，重新編碼一律寫 0，所以收到非 0 的保留位元時重新編碼結果會不同。
 - 字串陣列的元素一律用 u16 長度前綴。
 - 結構只能透過長度前綴陣列遞迴。
 - TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
@@ -62,4 +76,4 @@
 
 ## 下一步
 
-照 README 路線圖，下一版做條件欄位與位元欄位。條件欄位進來後 fuzz 也要補：要涵蓋條件成立與不成立的兩種排列。`diff` 已完成，條件欄位進來後要補規則（目前格式沒有選填欄位）。
+照 README 路線圖，位元欄位已完成，下一版做條件欄位。條件欄位進來後 fuzz 也要補：要涵蓋條件成立與不成立的兩種排列；`diff` 要補規則（目前格式沒有選填欄位）。條件若要能看位元欄位的子欄位，`memberFields()` 已經把子欄位攤平成一般成員，可以直接引用。

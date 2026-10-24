@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { generateWireshark } from '../src/gen/wireshark.js';
 import type { Protocol } from '../src/model.js';
-import { allTypes, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 function findTshark(): string | undefined {
   const candidates = ['tshark'];
@@ -547,5 +547,71 @@ describe.skipIf(!tshark)('Wireshark dissector in tshark', () => {
 
     expect(rows[4]!['_ws.expert.message']).toBe('');
     expect(rows[5]!['_ws.expert.message']).toBe('Unknown Small value: 5');
+  });
+
+  it('shows bit fields as masked fields and checks their enums', () => {
+    const wire = () => new Wire(true);
+    const files = capture(bitFields(), SERVER, [
+      // The Status vector of the round-trip tests: every bit field at its maximum.
+      toServer(wire().int(1, 1).int(1, 0xff).int(2, 0x0ffd).int(4, 0xffffffff).build()),
+      // Team 3 and mood 0 are not defined; bit 15 is unused and ignored.
+      toServer(wire().int(1, 1).int(1, 0).int(2, 0x8006).int(4, 5).build()),
+      toClient(wire().int(1, 2).int(1, 1).int(1, 0x05).int(2, 7).int(4, 0xffffffff).build()),
+      toServer(wire().int(1, 1).int(1, 0).int(1, 0xff).build()),
+    ]);
+    const rows = fieldRows(files, [
+      'bit_fields.status.state',
+      'bit_fields.status.alive',
+      'bit_fields.status.team',
+      'bit_fields.status.level',
+      'bit_fields.status.mood',
+      'bit_fields.status.low',
+      'bit_fields.status.top',
+      'bit_fields.cell.open',
+      'bit_fields.cell.owner',
+      'bit_fields.cell.id',
+      'bit_fields.board.everything',
+    ]);
+    const pick = (row: Row, ...names: string[]) =>
+      Object.fromEntries(names.map((n) => [n, row[`bit_fields.${n}`]]));
+    expect(rows.map((r) => r['_ws.col.info'])).toEqual(['Status', 'Status', 'Board', 'Status']);
+    expect(
+      pick(rows[0]!, 'status.state', 'status.team', 'status.level', 'status.mood', 'status.low'),
+    ).toEqual({
+      'status.state': '0x0ffd',
+      'status.team': '2',
+      'status.level': '127',
+      'status.mood': '3',
+      'status.low': '2147483647',
+    });
+    expect(rows[0]!['bit_fields.status.alive']).toMatch(/^(1|true)$/i);
+    expect(rows[0]!['bit_fields.status.top']).toMatch(/^(1|true)$/i);
+    expect(rows[0]!['_ws.expert.message']).toBe('');
+
+    expect(pick(rows[1]!, 'status.team', 'status.level', 'status.mood', 'status.low')).toEqual({
+      'status.team': '3',
+      'status.level': '0',
+      'status.mood': '0',
+      'status.low': '5',
+    });
+    expect(rows[1]!['bit_fields.status.top']).toMatch(/^(0|false)$/i);
+    expect(rows[1]!['_ws.expert.message']).toBe('Unknown Team value: 3|Unknown Mood value: 0');
+
+    expect(pick(rows[2]!, 'cell.owner', 'cell.id', 'board.everything')).toEqual({
+      'cell.owner': '2',
+      'cell.id': '7',
+      'board.everything': '4294967295',
+    });
+    expect(rows[2]!['bit_fields.cell.open']).toMatch(/^(1|true)$/i);
+    expect(rows[2]!['_ws.expert.message']).toBe('');
+
+    expect(rows[3]!['_ws.expert.message']).toBe(
+      'Truncated: 2 more bytes needed at offset 2, 1 left',
+    );
+
+    const tree = run(files, ['-V', '-O', 'bit_fields']);
+    expect(tree).toContain('= team: GREEN (2)');
+    expect(tree).toContain('= mood: ANGRY (3)');
+    expect(tree).toContain('= level: 127');
   });
 });

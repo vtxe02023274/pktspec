@@ -111,6 +111,7 @@ packets:
 | Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::array<T, N>`                                             |
 | Struct           | a name from `structs`          | sum of its fields     | generated class             | generated class                         | generated class                                         | generated `struct`                                             |
 | Enum             | a name from `enums`            | its base integer type | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase | generated `enum class`, members in PascalCase                  |
+| Bit fields       | `u8` `u16` `u32` with `bits`   | 1 / 2 / 4             | one member per bit field    | one member per bit field                | one member per bit field                                | one member per bit field                                       |
 
 - `length` defaults to `u16`. It counts bytes for strings and bytes, and elements for arrays.
 - Java has no unsigned integers, so unsigned types use the next larger type. `u64` uses `long`; values above 2^63 appear negative and can be printed with `Long.toUnsignedString`.
@@ -120,6 +121,26 @@ packets:
 - Enum base types can be `u8 u16 u32 i8 i16 i32`.
 - Structs may recurse through prefixed arrays (trees, for example), but cannot contain themselves directly or through a fixed array.
 - Arrays of `bytes` are not supported yet; wrap the bytes in a struct.
+
+### Bit fields
+
+A `u8`, `u16` or `u32` integer can be split into several fields, listed in order under `bits`:
+
+```yaml
+fields:
+  - name: state
+    type: u16 # the integer underneath, read and written in the protocol's byte order
+    bits:
+      - { name: alive, type: bool } # bit 0
+      - { name: team, type: Team, bits: 2 } # bits 1-2, an enum
+      - { name: level, bits: 7 } # bits 3-9, an unsigned integer
+```
+
+- Bits are assigned from the least significant bit up, so the first field starts at bit 0. The widths may not add up to more than the integer holds; the high bits left over are written as 0 and ignored when read.
+- A bit field's `type` is `bool` (1 bit, `bits` may be left out) or an enum (every value must be between 0 and 2^`bits` - 1, so none can be negative); without `type` it is an unsigned integer and `bits` is required. `bits` is at least 1.
+- In the generated code each bit field is an ordinary member, named by the language's usual rules; the group name (`state`) only shows up in the docs, in Wireshark and in `diff`. Bit fields share one namespace with the fields around them. An unsigned bit field gets the smallest unsigned type that holds it, for example 7 bits are a `short` in Java, a `byte` in C# and a `std::uint8_t` in C++.
+- Writing a value that does not fit its bits throws the usual range error: `IllegalArgumentException` in Java, `ArgumentException` in C#, `RangeError` in TypeScript and `PacketRangeError` in C++. Reading an enum value the enum does not define throws the same error as an ordinary enum field.
+- Bit fields cannot be array elements; wrap them in a struct and use an array of the struct.
 
 ## Generated code
 
@@ -299,8 +320,9 @@ Install it by copying the file to the personal plugins folder (Help > About Wire
 - Direction: traffic to the server port is `c2s` and traffic from it is `s2c`; when the server port is unset the TCP and UDP ports are used. If neither side matches and the opcode exists in both directions, both are tried and the one with fewer problems wins; a tie is read as `c2s` with a note.
 - Field names are `protocol.packet.field` in lowercase with underscores, for example `chat_room.say.room_id`; struct fields use `protocol.struct.field`, array elements add `.item`, and `protocol.packet`, `protocol.direction` and `protocol.opcode` are always there.
 - Expert info: truncated data, unknown opcode, unknown enum value, a length or count past the end of the packet, structs nested over 64 levels, data after the packet, and an unknown direction.
+- The integer of a bit field group is shown in hex, with one masked field per bit field under it; those are named like ordinary fields, `protocol.packet.field`. Unknown enum values in bit fields get expert info too.
 
-The docs generator produces field tables like this one:
+The docs generator produces field tables like this one (bit fields get another table with the bits of each field and the unused bits):
 
 | Field     | Type                       | Size (bytes) | Description |
 | --------- | -------------------------- | ------------ | ----------- |
@@ -331,14 +353,16 @@ info (2)
 
 The wire format is an opcode followed by the fields in order, with no names or tags, so the rules look at how the bytes are laid out:
 
-| Severity   | Changes                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| breaking   | Endianness or opcode width; a packet removed or its opcode or direction changed; a field added or removed (the bytes after it shift); a field's type, size, length prefix, fixed length or array element type; a reorder that changes the layout; an enum's underlying type, a value removed or renumbered; the same changes inside a struct (with the packets that carry it) |
-| compatible | A new packet with a new opcode, a new enum value, a new struct or enum                                                                                                                                                                                                                                                                                                        |
-| info       | Protocol rename, `version` or `doc` changes; a field, packet or enum value renamed with the same position and type; a type renamed with the same layout; a reorder that leaves the layout unchanged                                                                                                                                                                           |
+| Severity   | Changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| breaking   | Endianness or opcode width; a packet removed or its opcode or direction changed; a field added or removed (the bytes after it shift); a field's type, size, length prefix, fixed length or array element type; a reorder that changes the layout; an enum's underlying type, a value removed or renumbered; the integer under bit fields, a bit field's width, position (order included) or type, a bit field removed, or a new one that takes bits old versions use or is an enum without the value 0; the same changes inside a struct (with the packets that carry it) |
+| compatible | A new packet with a new opcode, a new enum value, a new struct or enum; a new bit field in high bits that were unused                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| info       | Protocol rename, `version` or `doc` changes; a field, packet, enum value or bit field renamed with the same position and type; a type renamed with the same layout; a reorder that leaves the layout unchanged                                                                                                                                                                                                                                                                                                                                                            |
 
 - A breaking change to a struct or enum that no packet uses is reported as info.
 - A new enum value counts as compatible, but the generated code throws on values it does not know, so an older peer that receives the new value still fails.
+- A new bit field in unused high bits is compatible: old versions write those bits as 0 and ignore them, and new versions read 0 from old data. Only an enum without the value 0 fails on old data, so that case is breaking. Removing a bit field is breaking: old versions still read those bits and only ever get 0.
+- When an enum is only used in bit fields, a change of its underlying type does not touch the wire and is reported as info.
 - Exit codes: 0 when nothing is breaking, 1 when anything is, 2 for usage errors. Like `check`, an unreadable file or one that fails validation exits 1 with the errors on stderr; errors from both files are listed together.
 
 ## Fuzz test data
@@ -425,7 +449,7 @@ Samples are grouped by `kind`, and the table is also the order in which they are
 | ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `boundary`         | none        | Whole packets with every field at zero (`zero`), at its lowest values (`min`) and at its highest values (`max`); then one field at a time set to a boundary value while the others stay zero |
 | `unknown_opcode`   | `invalid`   | In each direction the lowest and highest unused opcode, and opcodes that exist only in the other direction; opcode only, no body                                                             |
-| `unknown_enum`     | `invalid`   | Enum fields (also inside structs and arrays) set to the highest and the lowest value that no member uses                                                                                     |
+| `unknown_enum`     | `invalid`   | Enum fields (also inside structs and arrays) set to the highest and the lowest value that no member uses; for enums in bit fields, within what the bits hold                                 |
 | `length_past_end`  | `truncated` | The length prefix of a string, `bytes` or array set to the number of remaining bytes plus one                                                                                                |
 | `length_too_large` | `invalid`   | A `u32` length prefix set to `0xFFFFFFFF`, above 2^31 - 1                                                                                                                                    |
 | `truncated`        | `truncated` | The `max` sample cut at every byte boundary (lengths 0 up to the full length minus one); above 1024 bytes only the first and last 512 lengths                                                |
@@ -437,6 +461,7 @@ The boundary values for `boundary` are:
 - For `f32` and `f64`: -0, 1.5, NaN, positive and negative infinity, the largest and the lowest finite value and the smallest subnormal; for `bool`: true.
 - For strings and `bytes`: empty, short, multi-byte UTF-8 and the longest length the prefix allows; for fixed-size `bytes`: all `0xFF` and a fixed pattern.
 - Every enum value.
+- For bit fields: each field in turn at its maximum (true for `bool`, every value for an enum), with 0 covered by the all-zero sample; unused bits are always 0.
 - For arrays: empty, one element, the longest count and element boundary values (names start with `elem-`); for fixed-size arrays: boundary values of the first element (`first-`); nested structs level by level, down to the third level for recursive ones.
 - When the longest length a prefix allows does not fit in `--max-size`, the value is filled up to the longest length that fits and the file name says `fill` instead of `max`.
 
@@ -444,7 +469,7 @@ Notes:
 
 - File names are `<direction>-<packet>-<case>.bin` using only letters, digits, `_`, `.` and `-`, and stay unique on case-insensitive file systems. Samples with identical bytes are written once, so there can be fewer random samples than `--count`.
 - Random numbers come from a built-in mulberry32 generator, not `Math.random`. Each packet has its own stream (derived from the seed, the direction and the packet name), so the same definition, seed and options give the same bytes on every platform, and adding a packet does not change the random samples of the others. NaN is always the standard NaN.
-- There are no samples with trailing bytes: every generated decoder reads one packet and leaves later bytes unread without treating them as an error. For the same reason there are none for a `bool` other than 0 or 1 (any non-zero value is true) or for invalid UTF-8 (not an error).
+- There are no samples with trailing bytes: every generated decoder reads one packet and leaves later bytes unread without treating them as an error. For the same reason there are none for a `bool` other than 0 or 1 (any non-zero value is true), for invalid UTF-8 (not an error) or for unused bits of bit fields that are not 0 (not checked).
 - If the output directory already holds a `manifest.json`, the old `valid/` and `invalid/` folders are removed first so that samples of two runs never mix.
 - Samples over `--max-size` are not written and counted in `skipped.tooLarge`; those dropped by `--max-samples` are counted in `skipped.overLimit`. Both are also reported on stderr.
 
@@ -459,7 +484,8 @@ Notes:
 - [x] Wireshark Lua dissector, so captures show field names
 - [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
 - [x] `pktspec fuzz`: fuzz test data generated from the definition
-- [ ] Conditional fields (a value decides whether later fields are present) and bit fields
+- [x] Bit fields: one integer split into several fields
+- [ ] Conditional fields (a value decides whether later fields are present)
 
 ## Development
 

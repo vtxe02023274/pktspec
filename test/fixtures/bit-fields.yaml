@@ -1,0 +1,59 @@
+name: bit_fields
+version: 1
+endian: little
+opcode: u8
+doc: Bit fields in every base width, with enums, bools and unused high bits.
+
+enums:
+  Team:
+    type: u8
+    values:
+      RED: 0
+      BLUE: 1
+      GREEN: 2
+  Mood:
+    doc: Has no zero value, so an all-zero bit field does not decode.
+    type: i16
+    values:
+      CALM: 1
+      ANGRY: 3
+
+structs:
+  Cell:
+    fields:
+      - name: flags
+        type: u8
+        bits:
+          - { name: open, type: bool }
+          - { name: owner, type: Team, bits: 2 }
+      - { name: id, type: u16 }
+
+packets:
+  - name: Status
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: seq, type: u8 }
+      - name: state
+        type: u16
+        doc: Packed player state.
+        bits:
+          - { name: alive, type: bool, doc: False once the player is down. }
+          - { name: team, type: Team, bits: 2 }
+          - { name: level, bits: 7 }
+          - { name: mood, type: Mood, bits: 2 }
+      - name: wide
+        type: u32
+        bits:
+          - { name: low, bits: 31 }
+          - { name: top, type: bool }
+
+  - name: Board
+    opcode: 2
+    direction: s2c
+    fields:
+      - { name: cells, type: 'Cell[]', length: u8 }
+      - name: full
+        type: u32
+        bits:
+          - { name: everything, bits: 32 }

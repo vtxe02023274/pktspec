@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { INT_RANGES, findEnum, type Protocol } from '../src/model.js';
 import { Rng, generateFuzz, type FuzzCorpus, type FuzzSample } from '../src/fuzz.js';
-import { allTypes, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 const hex = (data: Uint8Array) => Buffer.from(data).toString('hex');
 const find = (corpus: FuzzCorpus, file: string): FuzzSample => {
@@ -100,6 +100,41 @@ describe('generateFuzz', () => {
       ).toBe(true);
     }
     expect(findEnum(chatRoom(), 'LoginStatus').values).toHaveLength(4);
+  });
+
+  it('puts each bit field at 0 and at its maximum, and leaves unused bits 0', () => {
+    const corpus = generateFuzz(bitFields());
+    const status = (name: string) => hex(find(corpus, `valid/c2s-Status-${name}.bin`).data);
+    // Opcode, u8 seq, u16 state, u32 wide, little-endian. Mood has no 0, so it starts at CALM (1).
+    expect(status('zero')).toBe('01' + '00' + '0004' + '00000000');
+    expect(status('max')).toBe('01' + 'ff' + 'fd0f' + 'ffffffff');
+    expect(status('state-alive-true')).toBe('01' + '00' + '0104' + '00000000');
+    expect(status('state-level-max')).toBe('01' + '00' + 'f807' + '00000000');
+    expect(status('state-team-GREEN')).toBe('01' + '00' + '0404' + '00000000');
+    expect(status('state-mood-ANGRY')).toBe('01' + '00' + '000c' + '00000000');
+    expect(status('wide-low-max')).toBe('01' + '00' + '0004' + 'ffffff7f');
+    expect(status('wide-top-true')).toBe('01' + '00' + '0004' + '00000080');
+    expect(hex(find(corpus, 'valid/s2c-Board-full-everything-max.bin').data)).toBe('0200ffffffff');
+    for (const sample of corpus.samples.filter((s) => s.valid && s.packet === 'Status')) {
+      expect(sample.data[3]! & 0xf0, sample.file).toBe(0);
+    }
+  });
+
+  it('uses enum values that fit in the bits but that no member uses', () => {
+    const corpus = generateFuzz(bitFields());
+    const status = (name: string) => find(corpus, `invalid/c2s-Status-enum-state-${name}.bin`);
+    // Team takes two bits and uses 0 to 2; Mood takes two bits and uses 1 and 3.
+    expect(hex(status('team-bad_3').data)).toBe('01' + '00' + '0604' + '00000000');
+    expect(hex(status('mood-bad_0').data)).toBe('01' + '00' + '0000' + '00000000');
+    expect(hex(status('mood-bad_2').data)).toBe('01' + '00' + '0008' + '00000000');
+    const enums = corpus.samples.filter((s) => s.kind === 'unknown_enum');
+    expect(enums.map((s) => s.file).sort()).toEqual([
+      'invalid/c2s-Status-enum-state-mood-bad_0.bin',
+      'invalid/c2s-Status-enum-state-mood-bad_2.bin',
+      'invalid/c2s-Status-enum-state-team-bad_3.bin',
+      'invalid/s2c-Board-enum-cells-elem-flags-owner-bad_3.bin',
+    ]);
+    expect(enums.every((s) => s.error === 'invalid')).toBe(true);
   });
 
   it('nests structs and stops recursive ones', () => {

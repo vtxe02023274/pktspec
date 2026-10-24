@@ -1,8 +1,11 @@
 import {
   INT_RANGES,
   PRIMITIVE_SIZES,
+  bitLayout,
   findEnum,
   findStruct,
+  type BitField,
+  type BitsType,
   type Direction,
   type Endian,
   type Enum,
@@ -370,7 +373,66 @@ class Builder {
       }
       case 'fixedArray':
         return repeat(this.profile(type.element, profile, depth + 1), type.size);
+      case 'bits':
+        return this.packBits(
+          type,
+          type.fields.map((f) => this.bitProfile(f, profile)),
+        );
     }
+  }
+
+  /** Packs one value per bit field, lowest bits first; the unused high bits stay 0. */
+  private packBits(type: BitsType, values: bigint[]): Uint8Array {
+    let packed = 0n;
+    for (const [i, { offset }] of bitLayout(type.fields).entries()) {
+      packed |= values[i]! << BigInt(offset);
+    }
+    return this.uint(packed, PRIMITIVE_SIZES[type.base]);
+  }
+
+  private bitProfile(field: BitField, profile: Profile): bigint {
+    if (field.type.kind === 'enum') {
+      const { values } = findEnum(this.protocol, field.type.name);
+      return BigInt((profile === 'max' ? values[values.length - 1]! : values[0]!).value);
+    }
+    return profile === 'max' ? (1n << BigInt(field.bits)) - 1n : 0n;
+  }
+
+  /** Each bit field in turn at its edge values, the others at their zero profile. */
+  private bitVariants(type: BitsType, mode: Mode): Variant[] {
+    if (mode === 'length') return [];
+    const defaults = type.fields.map((f) => this.bitProfile(f, 'zero'));
+    const result: Variant[] = [];
+    type.fields.forEach((field, j) => {
+      const values: [string, bigint][] = [];
+      if (field.type.kind === 'enum') {
+        const definition = findEnum(this.protocol, field.type.name);
+        const used = new Set(definition.values.map((v) => v.value));
+        if (mode === 'valid') {
+          const seen = new Set<number>([definition.values[0]!.value]);
+          for (const v of definition.values) {
+            if (!seen.has(v.value) && seen.add(v.value)) values.push([v.name, BigInt(v.value)]);
+          }
+        } else {
+          // The highest and the lowest value the bits can hold that no member uses.
+          const high = 2 ** field.bits - 1;
+          const free = [high, 0].map((start) => {
+            for (let v = start; v >= 0 && v <= high; v += start === 0 ? 1 : -1) {
+              if (!used.has(v)) return v;
+            }
+            return undefined;
+          });
+          for (const v of new Set(free)) if (v !== undefined) values.push([`bad_${v}`, BigInt(v)]);
+        }
+      } else if (mode === 'valid') {
+        values.push([field.type.kind === 'bool' ? 'true' : 'max', (1n << BigInt(field.bits)) - 1n]);
+      }
+      for (const [label, value] of values) {
+        const packed = defaults.map((d, i) => (i === j ? value : d));
+        result.push({ label: `${field.name}-${label}`, bytes: this.packBits(type, packed) });
+      }
+    });
+    return result;
   }
 
   private embed(label: string, before: Uint8Array[], inner: Variant, after: Uint8Array[]): Variant {
@@ -464,6 +526,8 @@ class Builder {
         }
         return result;
       }
+      case 'bits':
+        return this.bitVariants(type, mode);
       case 'fixedArray': {
         if (depth >= MAX_DEPTH || type.size < 1) return [];
         const element = this.profile(type.element, 'zero', depth + 1);
@@ -783,6 +847,15 @@ class Builder {
       case 'fixedArray':
         return concat(
           Array.from({ length: type.size }, () => this.random(type.element, rng, depth + 1)),
+        );
+      case 'bits':
+        return this.packBits(
+          type,
+          type.fields.map((field) => {
+            if (field.type.kind !== 'enum') return rng.bits(field.bits);
+            const { values } = findEnum(this.protocol, field.type.name);
+            return BigInt(values[rng.below(values.length)]!.value);
+          }),
         );
     }
   }

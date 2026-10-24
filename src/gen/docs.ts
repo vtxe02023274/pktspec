@@ -1,7 +1,10 @@
 import {
   PRIMITIVE_SIZES,
+  bitLayout,
   fieldsSize,
   wireSize,
+  type BitField,
+  type BitsType,
   type ElementType,
   type Field,
   type FieldType,
@@ -87,12 +90,48 @@ function fieldTable(fields: Field[], protocol: Protocol): string[] {
     (field) =>
       `| ${code(field.name)} | ${typeName(field.type)} | ${fieldSize(field.type, protocol)} | ${cell(field.doc ?? '')} |`,
   );
+  const bitTables = fields.flatMap((field) =>
+    field.type.kind === 'bits' ? bitTable(field.name, field.type) : [],
+  );
   return [
     '| Field | Type | Size (bytes) | Description |',
     '| --- | --- | --- | --- |',
     ...rows,
     '',
+    ...bitTables,
   ];
+}
+
+function bitTable(name: string, type: BitsType): string[] {
+  const width = PRIMITIVE_SIZES[type.base] * 8;
+  const range = (low: number, high: number) => (low === high ? `${low}` : `${low}–${high}`);
+  const rows = bitLayout(type.fields).map(
+    ({ field, offset }) =>
+      `| ${range(offset, offset + field.bits - 1)} | ${code(field.name)} | ${bitTypeName(field)} | ${cell(field.doc ?? '')} |`,
+  );
+  const used = type.fields.reduce((sum, field) => sum + field.bits, 0);
+  if (used < width) {
+    rows.push(`| ${range(used, width - 1)} | (unused) |  | Written as 0, ignored when read. |`);
+  }
+  return [
+    `Bits of ${code(name)}, from the least significant bit:`,
+    '',
+    '| Bits | Field | Type | Description |',
+    '| --- | --- | --- | --- |',
+    ...rows,
+    '',
+  ];
+}
+
+function bitTypeName(field: BitField): string {
+  switch (field.type.kind) {
+    case 'bool':
+      return 'bool';
+    case 'enum':
+      return link(field.type.name);
+    case 'uint':
+      return 'unsigned';
+  }
 }
 
 function typeName(type: FieldType): string {
@@ -101,6 +140,8 @@ function typeName(type: FieldType): string {
       return `${elementName(type.element)}[] (${type.length} count)`;
     case 'fixedArray':
       return `${elementName(type.element)}[${type.size}]`;
+    case 'bits':
+      return `${type.base} bit fields`;
     default:
       return elementName(type);
   }

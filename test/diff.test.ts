@@ -311,6 +311,102 @@ describe('diff structs and enums', () => {
   });
 });
 
+describe('diff bit fields', () => {
+  const team =
+    'enums:\n  Team:\n    type: i8\n    values: { RED: 0, BLUE: 1 }\n  Mood:\n    type: u8\n    values: { CALM: 1 }\n';
+  const flags = (bits: string, type = 'u8') =>
+    proto(team + packets(packet(`{ name: f, type: ${type}, bits: [${bits}] }`)));
+  const base = flags('{ name: a, type: bool }, { name: b, bits: 3 }');
+
+  it('flags changed sizes, order and types as breaking', () => {
+    expect(brief(base, flags('{ name: a, type: bool }, { name: b, bits: 4 }'))).toEqual([
+      'breaking bit-field-resized A.f.b',
+    ]);
+    expect(
+      brief(
+        flags('{ name: a, bits: 2 }, { name: b, bits: 2 }'),
+        flags('{ name: b, bits: 2 }, { name: a, bits: 2 }'),
+      ),
+    ).toEqual(['breaking bit-field-moved A.f.a', 'breaking bit-field-moved A.f.b']);
+    expect(brief(base, flags('{ name: a, bits: 1 }, { name: b, bits: 3 }'))).toEqual([
+      'breaking bit-field-type-changed A.f.a',
+    ]);
+    expect(brief(base, flags('{ name: a, type: Team, bits: 1 }, { name: b, bits: 3 }'))).toEqual([
+      'breaking bit-field-type-changed A.f.a',
+    ]);
+  });
+
+  it('flags a changed underlying integer as breaking', () => {
+    expect(brief(base, flags('{ name: a, type: bool }, { name: b, bits: 3 }', 'u16'))).toEqual([
+      'breaking field-type-changed A.f',
+    ]);
+  });
+
+  it('treats a new bit field in unused high bits as compatible', () => {
+    const changes = diff(
+      base,
+      flags('{ name: a, type: bool }, { name: b, bits: 3 }, { name: c, bits: 4 }'),
+    );
+    expect(changes.map((c) => `${c.severity} ${c.rule} ${c.path}`)).toEqual([
+      'compatible bit-field-added A.f.c',
+    ]);
+    expect(changes[0]!.message).toBe(
+      "packet 'A' field 'f.c': added (bits 4-7) in unused bits, which old versions write as 0 and ignore",
+    );
+  });
+
+  it('flags a new bit field as breaking when 0 is not a value of its enum or bits shift', () => {
+    expect(
+      brief(
+        base,
+        flags('{ name: a, type: bool }, { name: b, bits: 3 }, { name: c, type: Mood, bits: 1 }'),
+      ),
+    ).toEqual(['breaking bit-field-added A.f.c']);
+    expect(
+      brief(base, flags('{ name: c, bits: 1 }, { name: a, type: bool }, { name: b, bits: 3 }')),
+    ).toEqual([
+      'breaking bit-field-moved A.f.a',
+      'breaking bit-field-moved A.f.b',
+      'breaking bit-field-added A.f.c',
+    ]);
+  });
+
+  it('flags a removed bit field as breaking', () => {
+    expect(brief(base, flags('{ name: a, type: bool }'))).toEqual([
+      'breaking bit-field-removed A.f.b',
+    ]);
+  });
+
+  it('reports renamed bit fields and doc changes as info', () => {
+    expect(brief(base, flags('{ name: a, type: bool }, { name: c, bits: 3, doc: x }'))).toEqual([
+      'info bit-field-renamed A.f.c',
+      'info doc-changed A.f.c',
+    ]);
+  });
+
+  it('reports enum changes through bit fields, but not their underlying type', () => {
+    const before = flags('{ name: t, type: Team, bits: 1 }');
+    const after = proto(
+      'enums:\n  Team:\n    type: i16\n    values: { RED: 1, BLUE: 0 }\n  Mood:\n    type: u8\n    values: { CALM: 1 }\n' +
+        packets(packet('{ name: f, type: u8, bits: [{ name: t, type: Team, bits: 1 }] }')),
+    );
+    const changes = diff(before, after);
+    expect(changes.map((c) => `${c.severity} ${c.rule} ${c.path}`)).toEqual([
+      'info enum-type-changed Team',
+      'breaking enum-value-renumbered Team.RED',
+      'breaking enum-value-renumbered Team.BLUE',
+    ]);
+    expect(changes[0]!.message).toContain('only used in bit fields');
+    expect(changes[1]!.usedBy).toEqual(['A']);
+  });
+
+  it('points at the bit field in both files', () => {
+    const [change] = diff(base, flags('{ name: a, type: bool }, { name: b, bits: 4 }'));
+    expect(change!.old).toEqual({ line: 13, column: 75 });
+    expect(change!.new).toEqual({ line: 13, column: 75 });
+  });
+});
+
 describe('diff locations', () => {
   it('takes line numbers from the new file, and the old file where it exists', () => {
     const before =

@@ -6,8 +6,16 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { pascalCase } from '../src/gen/common.js';
 import { generateTypeScript } from '../src/gen/typescript.js';
-import { INT_RANGES, findEnum, findStruct, type FieldType, type Protocol } from '../src/model.js';
-import { allTypes, chatRoom } from './helpers.js';
+import {
+  INT_RANGES,
+  bitMember,
+  findEnum,
+  findStruct,
+  type Field,
+  type MemberType,
+  type Protocol,
+} from '../src/model.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 type Variant = 'max' | 'min';
 
@@ -25,8 +33,20 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
   bool: { max: 'true', min: 'false' },
 };
 
+/** Constructor arguments for the fields; a bit field group gives one per bit field. */
+function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  return fields.flatMap((field) => {
+    if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
+    return field.type.fields.map((bit) =>
+      bit.type.kind === 'uint'
+        ? String(variant === 'max' ? 2 ** bit.bits - 1 : 0)
+        : sample(protocol, bitMember(bit).type, variant, depth),
+    );
+  });
+}
+
 /** Builds a TypeScript expression holding an edge-case value of the given type. */
-function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0): string {
+function sample(protocol: Protocol, type: MemberType, variant: Variant, depth = 0): string {
   switch (type.kind) {
     case 'primitive':
       return PRIMITIVE_SAMPLES[type.name]![variant];
@@ -47,7 +67,7 @@ function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0
     }
     case 'struct': {
       const fields = findStruct(protocol, type.name).fields;
-      const args = fields.map((f) => sample(protocol, f.type, variant, depth + 1));
+      const args = samples(protocol, fields, variant, depth + 1);
       return `new ${type.name}(${args.join(', ')})`;
     }
     case 'array': {
@@ -123,12 +143,29 @@ function errorChecks(protocol: Protocol): string[] {
       "check(new Texts('\\ufeff', '\\ufeffabc', '', new Uint8Array(0), new Uint8Array(4)), true);",
     );
   }
+  if (protocol.name === 'bit_fields') {
+    const status = (field: string, value: string): string =>
+      `{ const p = new Status(); p.${field} = ${value}; throws(RangeError, () => p.encode(), '${field} ${value}'); }`;
+    const decode = (bytes: string) =>
+      `BitFieldsProtocol.decodeFromClient(new Uint8Array([${bytes}]))`;
+    checks.push(
+      status('level', '128'),
+      status('level', '-1'),
+      status('level', '1.5'),
+      status('low', '0x80000000'),
+      status('team', '4 as Team'),
+      status('mood', '-1 as Mood'),
+      `throws(InvalidPacketError, () => ${decode('1, 0, 0, 0, 0, 0, 0, 0')}, 'mood 0');`,
+      `throws(InvalidPacketError, () => ${decode('1, 0, 6, 4, 0, 0, 0, 0')}, 'team 3');`,
+      `expect(new Status().equals(${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}), 'unused bits');`,
+    );
+  }
   return checks.map((check) => `  ${check}`);
 }
 
 function packetSample(protocol: Protocol, name: string): string {
   const packet = protocol.packets.find((p) => p.name === name)!;
-  const args = packet.fields.map((f) => sample(protocol, f.type, 'max'));
+  const args = samples(protocol, packet.fields, 'max');
   return `new ${name}(${args.join(', ')})`;
 }
 
@@ -136,7 +173,7 @@ function driver(protocol: Protocol): string {
   const entry = `${pascalCase(protocol.name)}Protocol`;
   const checks = protocol.packets.flatMap((packet) =>
     (['max', 'min'] as const).map((variant) => {
-      const args = packet.fields.map((f) => sample(protocol, f.type, variant));
+      const args = samples(protocol, packet.fields, variant);
       const fromClient = packet.direction === 'c2s';
       return `  check(new ${packet.name}(${args.join(', ')}), ${fromClient});`;
     }),
@@ -266,6 +303,14 @@ describe('TypeScript round trip', () => {
     // Little-endian u16 opcode 0x0003, u32 room id, then a u16-prefixed UTF-8 string.
     expect(lines).toContain('Say 0300ffffffff1000e8818ae5a4a920726f6f6d20f09f9880');
     expect(lines).toContain('Say 0300000000000000');
+  }, 120_000);
+
+  it('packs bit fields into their integer', () => {
+    const lines = runRoundTrip(bitFields());
+    // Status: u8 seq, then u16 and u32 bit fields in little-endian order.
+    expect(lines).toContain('Status 01fffd0fffffffff');
+    expect(lines).toContain('Status 0100000400000000');
+    expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
   }, 120_000);
 
   it('encodes and decodes every type in big-endian order', () => {

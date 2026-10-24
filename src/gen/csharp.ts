@@ -1,18 +1,33 @@
 import {
   PRIMITIVE_SIZES,
+  bitEnums,
+  bitGroups,
+  bitLayout,
+  bitMember,
   findEnum,
+  memberFields,
   wireSize,
+  type BitsType,
   type ElementType,
   type Enum,
   type EnumBaseType,
   type Field,
   type FieldType,
+  type MemberField,
+  type MemberType,
   type Packet,
   type PrimitiveType,
   type Protocol,
   type Struct,
 } from '../model.js';
-import { enumMemberName, hex, pascalCase, uniqueName, type GeneratedFile } from './common.js';
+import {
+  camelCase,
+  enumMemberName,
+  hex,
+  pascalCase,
+  uniqueName,
+  type GeneratedFile,
+} from './common.js';
 
 export interface CSharpOptions {
   /** C# namespace of the generated types; derived from the protocol name when omitted. */
@@ -133,6 +148,16 @@ const WIRE_NAMES: Record<PrimitiveType, string> = {
 
 const INDENT = '    ';
 
+const CHECK_BITS = `    /// <exception cref="ArgumentException">The value does not fit in <paramref name="bits"/> bits.</exception>
+    internal static uint CheckBits(ulong value, int bits, string field)
+    {
+        if (value >= 1UL << bits)
+        {
+            throw new ArgumentException($"{field} out of range for {bits} bits: {value}");
+        }
+        return (uint)value;
+    }`;
+
 export function defaultCSharpNamespace(protocolName: string): string {
   return pascalCase(protocolName);
 }
@@ -157,7 +182,7 @@ class CSharpGenerator {
   private readonly codec: string;
   private readonly protocolClass: string;
   private readonly typeNames: Set<string>;
-  private readonly memberNames = new Map<Field, string>();
+  private readonly memberNames = new Map<MemberField, string>();
   private readonly enumMembers = new Map<string, string[]>();
 
   constructor(
@@ -188,7 +213,7 @@ class CSharpGenerator {
     }
     for (const { name, fields } of [...protocol.structs, ...protocol.packets]) {
       const used = new Set([...RESERVED_MEMBERS, name]);
-      for (const field of fields) {
+      for (const field of memberFields(fields)) {
         const base = pascalCase(field.name);
         const member = uniqueName(base, used, (candidate) => this.hidesType(candidate, field.type));
         this.memberNames.set(field, member);
@@ -210,12 +235,12 @@ class CSharpGenerator {
   }
 
   // A member named like a type breaks static calls on that type, unless it is the Color Color case.
-  private hidesType(name: string, type: FieldType): boolean {
+  private hidesType(name: string, type: MemberType): boolean {
     if (!this.typeNames.has(name)) return false;
     return !((type.kind === 'struct' || type.kind === 'enum') && type.name === name);
   }
 
-  private member(field: Field): string {
+  private member(field: MemberField): string {
     return this.memberNames.get(field)!;
   }
 
@@ -483,7 +508,12 @@ ${primitive('i64', 'Int64')}
   }
 
   private codecClass(): string {
-    const enumReaders = this.protocol.enums.map((e) => this.enumReader(e));
+    const inBits = bitEnums(this.protocol);
+    const enumReaders = this.protocol.enums.flatMap((e) => [
+      this.enumReader(e),
+      ...(inBits.has(e.name) ? [this.bitEnumReader(e)] : []),
+    ]);
+    const checkBits = bitGroups(this.protocol).length > 0 ? `\n\n${CHECK_BITS}` : '';
     return this.file(
       ['System', 'System.Collections.Generic', 'System.Globalization', 'System.IO', 'System.Text'],
       `/// <summary>Helpers shared by the generated classes.</summary>
@@ -583,7 +613,7 @@ internal static class ${this.codec}
             parts[i] = Format(value[i]);
         }
         return "[" + string.Join(", ", parts) + "]";
-    }${enumReaders.map((r) => `\n\n${r}`).join('')}
+    }${checkBits}${enumReaders.map((r) => `\n\n${r}`).join('')}
 }`,
     );
   }
@@ -595,6 +625,21 @@ internal static class ${this.codec}
     return `    internal static ${definition.name} Read${definition.name}(PacketReader reader)
     {
         ${base} value = reader.Read${WIRE_NAMES[definition.type]}();
+        switch (value)
+        {
+${cases}
+                return (${definition.name})value;
+            default:
+                throw new InvalidDataException("unknown ${definition.name} value: " + value);
+        }
+    }`;
+  }
+
+  private bitEnumReader(definition: Enum): string {
+    const values = [...new Set(definition.values.map((v) => v.value))];
+    const cases = values.map((v) => `${INDENT}${INDENT}${INDENT}case ${v}:`).join('\n');
+    return `    internal static ${definition.name} BitsTo${definition.name}(uint value)
+    {
         switch (value)
         {
 ${cases}
@@ -703,12 +748,13 @@ ${members}
   ): string {
     const members: string[] = [];
     const opcodeDigits = this.protocol.opcode === 'u8' ? 2 : 4;
+    const exposed = memberFields(fields);
     if (packet) {
       members.push(`    public const int OpcodeValue = ${hex(packet.opcode, opcodeDigits)};`);
     }
-    if (fields.length > 0) {
+    if (exposed.length > 0) {
       members.push(
-        fields
+        exposed
           .map((field) => {
             const initializer = this.defaultValue(field.type);
             const declaration = `public ${this.csType(field.type)} ${this.member(field)} { get; set; }`;
@@ -720,7 +766,7 @@ ${members}
           .join('\n'),
       );
     }
-    members.push(this.constructors(name, fields));
+    members.push(this.constructors(name, exposed));
     if (packet) {
       members.push(`    /// <inheritdoc />
     public int Opcode => OpcodeValue;`);
@@ -735,9 +781,9 @@ ${members}
     }`);
     }
     members.push(this.readMethod(name, fields));
-    members.push(this.equalsMethods(name, fields));
-    members.push(this.hashCodeMethod(fields));
-    members.push(this.toStringMethod(name, fields));
+    members.push(this.equalsMethods(name, exposed));
+    members.push(this.hashCodeMethod(exposed));
+    members.push(this.toStringMethod(name, exposed));
 
     const direction = packet?.direction === 'c2s' ? 'client to server' : 'server to client';
     const opcodeDoc = packet
@@ -754,7 +800,7 @@ ${members}
     return this.file(usings, `${classDoc}public sealed class ${name} : ${bases}\n{\n${body}\n}`);
   }
 
-  private constructors(name: string, fields: Field[]): string {
+  private constructors(name: string, fields: MemberField[]): string {
     if (fields.length === 0) return `    public ${name}()\n    {\n    }`;
     const empty = `    public ${name}()\n    {\n    }`;
     const parameters = fields.map((f) => `${this.csType(f.type)} ${this.parameter(f)}`);
@@ -767,7 +813,7 @@ ${members}
     return `${empty}\n\n${wrapped}\n    {\n${assignments.join('\n')}\n    }`;
   }
 
-  private parameter(field: Field): string {
+  private parameter(field: MemberField): string {
     const member = this.member(field);
     const camel = member.charAt(0).toLowerCase() + member.slice(1);
     return KEYWORDS.has(camel) ? `@${camel}` : camel;
@@ -777,12 +823,14 @@ ${members}
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const value = `this.${this.member(field)}`;
       const { type } = field;
       const size = wireSize(type, this.protocol);
       if (size.fixed) {
         fixed += size.min;
-      } else if (type.kind === 'array' || type.kind === 'fixedArray') {
+        continue;
+      }
+      const value = `this.${this.member(field as MemberField)}`;
+      if (type.kind === 'array' || type.kind === 'fixedArray') {
         const element = wireSize(type.element, this.protocol);
         const prefix = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
         fixed += prefix;
@@ -812,7 +860,7 @@ ${members}
     return `${doc}    ${signature}\n    {\n${body}    }`;
   }
 
-  private variableSize(type: ElementType, value: string): string {
+  private variableSize(type: FieldType, value: string): string {
     switch (type.kind) {
       case 'string':
         return `${this.codec}.StringSize(${value}, ${PRIMITIVE_SIZES[type.length]})`;
@@ -827,9 +875,10 @@ ${members}
 
   private writeMethod(fields: Field[], isPacket: boolean): string {
     const statements = fields.flatMap((field) => {
-      const name = this.member(field);
-      const value = `this.${name}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.writeBits(type, `${camelCase(field.name)}Bits`);
+      const name = this.member(field as MemberField);
+      const value = `this.${name}`;
       if (type.kind !== 'array' && type.kind !== 'fixedArray') {
         return [`${this.write(type, value, name)};`];
       }
@@ -849,6 +898,27 @@ ${members}
       ? '    /// <inheritdoc />\n'
       : '    /// <summary>Writes this struct.</summary>\n';
     return `${doc}    public void WriteTo(PacketWriter writer)\n    {\n${indentLines(statements)}    }`;
+  }
+
+  private writeBits(type: BitsType, local: string): string[] {
+    const statements = [`uint ${local} = 0;`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const member = this.member(bitMember(field));
+      const shift = offset === 0 ? '' : ` << ${offset}`;
+      if (field.type.kind === 'bool') {
+        const bit = `this.${member} ? 1u : 0u`;
+        statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
+        continue;
+      }
+      // An enum has no implicit conversion, and a negative one must still fail the check.
+      const value = field.type.kind === 'enum' ? `(ulong)this.${member}` : `this.${member}`;
+      statements.push(
+        `${local} |= ${this.codec}.CheckBits(${value}, ${field.bits}, ${csharpString(member)})${shift};`,
+      );
+    }
+    const value = type.base === 'u32' ? local : `(${PRIMITIVE_CS[type.base]})${local}`;
+    statements.push(`writer.Write${WIRE_NAMES[type.base]}(${value});`);
+    return statements;
   }
 
   private write(type: ElementType, value: string, field: string): string {
@@ -872,9 +942,10 @@ ${members}
 
   private readMethod(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const member = this.member(field);
-      const target = `result.${member}`;
       const { type } = field;
+      if (type.kind === 'bits') return this.readBits(type, `${camelCase(field.name)}Bits`);
+      const member = this.member(field as MemberField);
+      const target = `result.${member}`;
       if (type.kind === 'array') {
         const count = `${member.charAt(0).toLowerCase()}${member.slice(1)}Count`;
         return [
@@ -905,6 +976,26 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
+  private readBits(type: BitsType, local: string): string[] {
+    const statements = [`uint ${local} = reader.Read${WIRE_NAMES[type.base]}();`];
+    for (const { field, offset } of bitLayout(type.fields)) {
+      const target = `result.${this.member(bitMember(field))}`;
+      const shifted = offset === 0 ? local : `(${local} >> ${offset})`;
+      const bits = `${shifted} & ${hex(2 ** field.bits - 1)}u`;
+      if (field.type.kind === 'bool') {
+        statements.push(`${target} = (${bits}) != 0;`);
+      } else if (field.type.kind === 'enum') {
+        statements.push(`${target} = ${this.codec}.BitsTo${field.type.name}(${bits});`);
+      } else if (field.bits > 16) {
+        statements.push(`${target} = ${bits};`);
+      } else {
+        const cast = field.bits > 8 ? 'ushort' : 'byte';
+        statements.push(`${target} = (${cast})(${bits});`);
+      }
+    }
+    return statements;
+  }
+
   private read(type: ElementType): string {
     switch (type.kind) {
       case 'primitive':
@@ -922,7 +1013,7 @@ ${indentLines(statements)}        return result;
     }
   }
 
-  private equalsMethods(name: string, fields: Field[]): string {
+  private equalsMethods(name: string, fields: MemberField[]): string {
     const comparisons = fields.map((field) => {
       const n = this.member(field);
       const { type } = field;
@@ -956,7 +1047,7 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
-  private hashCodeMethod(fields: Field[]): string {
+  private hashCodeMethod(fields: MemberField[]): string {
     if (fields.length === 0) {
       return `    public override int GetHashCode()
     {
@@ -981,7 +1072,7 @@ ${indentLines(additions)}        return hash.ToHashCode();
     }`;
   }
 
-  private toStringMethod(name: string, fields: Field[]): string {
+  private toStringMethod(name: string, fields: MemberField[]): string {
     const parts = fields.map((field, index) => {
       const n = this.member(field);
       const label = csharpString(`${index === 0 ? '' : ', '}${n}=`);
@@ -997,7 +1088,7 @@ ${indentLines(additions)}        return hash.ToHashCode();
     }`;
   }
 
-  private csType(type: FieldType): string {
+  private csType(type: MemberType): string {
     switch (type.kind) {
       case 'primitive':
         return PRIMITIVE_CS[type.name];
@@ -1015,7 +1106,7 @@ ${indentLines(additions)}        return hash.ToHashCode();
     }
   }
 
-  private defaultValue(type: FieldType): string | undefined {
+  private defaultValue(type: MemberType): string | undefined {
     switch (type.kind) {
       case 'primitive':
         return undefined;

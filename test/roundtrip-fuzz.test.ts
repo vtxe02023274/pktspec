@@ -11,7 +11,7 @@ import { defaultCSharpNamespace, generateCSharp } from '../src/gen/csharp.js';
 import { defaultJavaPackage, generateJava } from '../src/gen/java.js';
 import { generateTypeScript } from '../src/gen/typescript.js';
 import type { Protocol } from '../src/model.js';
-import { allTypes, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 // Every generated decoder is fed the whole corpus: valid samples must decode and encode back to
 // the same bytes, invalid ones must raise the error class named in the manifest.
@@ -90,10 +90,11 @@ function expectOk(run: { stdout: string; stderr: string; status: number | null }
 const protocols: [string, () => Protocol][] = [
   ['chat-room', chatRoom],
   ['all-types', allTypes],
+  ['bit-fields', bitFields],
 ];
 
 describe('fuzz corpus', () => {
-  it('has samples of every kind for the two fixtures', () => {
+  it('has samples of every kind for the fixtures', () => {
     for (const [, load] of protocols) {
       const kinds = new Set(corpusFor(load()).samples.map((s) => s.kind));
       expect(kinds).toContain('boundary');

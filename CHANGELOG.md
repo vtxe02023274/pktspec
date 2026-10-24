@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 位元欄位：欄位加上 `bits` 清單，把一個 `u8`、`u16` 或 `u32` 拆成無號整數、`bool` 或列舉子欄位，從最低位元開始排，未使用的位元寫 0、讀時忽略。產生的程式碼裡子欄位就是一般成員，寫入超出位元數時丟各語言的範圍錯誤；`check` 檢查位元數、總寬度、名稱與列舉值是否放得下；文件列出位元範圍，Wireshark 以位元遮罩欄位顯示；`diff` 比對子欄位的位元數、位置與型別，在未使用的高位元新增子欄位算相容；`fuzz` 涵蓋子欄位的 0、最大值與放得下但未定義的列舉值。
 - `pktspec fuzz`：依定義產生 fuzz 測試資料，一個樣本一個檔案加 `manifest.json`；有效樣本涵蓋各型別邊界值（整數極值、NaN、無限大、-0、空與最大長度、巢狀結構、每個列舉值）與可重現的隨機樣本（`--seed`、`--count`），無效樣本涵蓋逐位元組截斷、未知 opcode、未知列舉值、長度前綴超出，並標出各語言解碼器會丟的錯誤類別；`--max-size`、`--max-samples` 控制樣本大小與總數。
 - `pktspec gen wireshark`：產生單一檔案的 Wireshark Lua dissector（3.6 以上），顯示封包、欄位與列舉名稱，截斷、未知 opcode、未知列舉值、長度超出等情況標專家資訊；`--port` 指定 TCP、UDP、伺服器連接埠的預設值，也可用 Decode As。
 - `pktspec diff old.yaml new.yaml`：比對兩份定義，依 breaking、compatible、info 分組列出差異，附新舊檔行號與經過的封包；`--format json` 輸出給程式讀；有 breaking 時結束碼為 1。

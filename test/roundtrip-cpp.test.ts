@@ -6,8 +6,16 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { compile } from '../src/compile.js';
 import { pascalCase } from '../src/gen/common.js';
 import { defaultCppNamespace, generateCpp } from '../src/gen/cpp.js';
-import { INT_RANGES, findEnum, findStruct, type FieldType, type Protocol } from '../src/model.js';
-import { allTypes, chatRoom } from './helpers.js';
+import {
+  INT_RANGES,
+  bitMember,
+  findEnum,
+  findStruct,
+  type Field,
+  type MemberType,
+  type Protocol,
+} from '../src/model.js';
+import { allTypes, bitFields, chatRoom } from './helpers.js';
 
 interface Compiler {
   command: string;
@@ -60,7 +68,7 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
 };
 
 /** The C++ type a field has in the generated code. */
-function cppType(type: FieldType): string {
+function cppType(type: MemberType): string {
   switch (type.kind) {
     case 'primitive':
       return {
@@ -101,8 +109,21 @@ function cppBytes(text: string): string {
   return `std::string("${escapes.join('')}")`;
 }
 
+/** Constructor arguments for the fields; a bit field group gives one per bit field. */
+function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  return fields.flatMap((field) => {
+    if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
+    return field.type.fields.map((bit) => {
+      const member = bitMember(bit).type;
+      if (bit.type.kind !== 'uint') return sample(protocol, member, variant, depth);
+      const value = variant === 'max' ? 2 ** bit.bits - 1 : 0;
+      return `static_cast<${cppType(member)}>(${value}u)`;
+    });
+  });
+}
+
 /** Builds a C++ expression holding an edge-case value of the given type. */
-function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0): string {
+function sample(protocol: Protocol, type: MemberType, variant: Variant, depth = 0): string {
   switch (type.kind) {
     case 'primitive':
       return PRIMITIVE_SAMPLES[type.name]![variant];
@@ -130,7 +151,7 @@ function sample(protocol: Protocol, type: FieldType, variant: Variant, depth = 0
     }
     case 'struct': {
       const fields = findStruct(protocol, type.name).fields;
-      const args = fields.map((f) => sample(protocol, f.type, variant, depth + 1));
+      const args = samples(protocol, fields, variant, depth + 1);
       return `${type.name}(${args.join(', ')})`;
     }
     case 'array': {
@@ -196,6 +217,20 @@ function errorChecks(protocol: Protocol): string[] {
       'throwsAs<TruncatedPacketError>([] { AllTypesProtocol::decodeFromServer(bytes({ 2, 0xFF, 0xFF })); }, "huge count past the data");',
     );
   }
+  if (protocol.name === 'bit_fields') {
+    const status = (field: string, value: string) =>
+      `throwsAs<PacketRangeError>([] { Status p; p.${field} = ${value}; p.encode(); }, "${field} ${value}");`;
+    const decode = (bytes: string) => `BitFieldsProtocol::decodeFromClient(bytes({ ${bytes} }))`;
+    checks.push(
+      status('level', '128'),
+      status('low', '0x80000000u'),
+      status('team', 'static_cast<Team>(4)'),
+      status('mood', 'static_cast<Mood>(-1)'),
+      `throwsAs<UnknownEnumValueError>([] { ${decode('1, 0, 0, 0, 0, 0, 0, 0')}; }, "mood 0");`,
+      `throwsAs<UnknownEnumValueError>([] { ${decode('1, 0, 6, 4, 0, 0, 0, 0')}; }, "team 3");`,
+      `expect(static_cast<const Status&>(*${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}) == Status(), "unused bits");`,
+    );
+  }
   return checks.map((check) => `    ${check}`);
 }
 
@@ -203,7 +238,7 @@ function driver(protocol: Protocol, namespace: string): string {
   const entry = `${pascalCase(protocol.name)}Protocol`;
   const checks = protocol.packets.flatMap((packet) =>
     (['max', 'min'] as const).map((variant) => {
-      const args = packet.fields.map((f) => sample(protocol, f.type, variant));
+      const args = samples(protocol, packet.fields, variant);
       const fromClient = packet.direction === 'c2s';
       return `    check<${packet.name}>("${packet.name}", ${packet.name}(${args.join(', ')}), ${fromClient});`;
     }),
@@ -427,6 +462,14 @@ describe.skipIf(!compiler)('C++ round trip', () => {
     // Little-endian u16 opcode 0x0003, u32 room id, then a u16-prefixed UTF-8 string.
     expect(lines).toContain('Say 0300ffffffff1000e8818ae5a4a920726f6f6d20f09f9880');
     expect(lines).toContain('Say 0300000000000000');
+  }, 240_000);
+
+  it('packs bit fields into their integer', () => {
+    const lines = runRoundTrip(bitFields());
+    // Status: u8 seq, then u16 and u32 bit fields in little-endian order.
+    expect(lines).toContain('Status 01fffd0fffffffff');
+    expect(lines).toContain('Status 0100000400000000');
+    expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
   }, 240_000);
 
   it('encodes and decodes every type in big-endian order', () => {
