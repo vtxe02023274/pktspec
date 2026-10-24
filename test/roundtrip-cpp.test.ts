@@ -9,13 +9,14 @@ import { defaultCppNamespace, generateCpp } from '../src/gen/cpp.js';
 import {
   INT_RANGES,
   bitMember,
+  fieldMembers,
   findEnum,
   findStruct,
   type Field,
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
 
 interface Compiler {
   command: string;
@@ -111,7 +112,9 @@ function cppBytes(text: string): string {
 
 /** Constructor arguments for the fields; a bit field group gives one per bit field. */
 function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  const present = presentFields(protocol, fields, variant);
   return fields.flatMap((field) => {
+    if (!present.has(field)) return fieldMembers(field).map(() => 'std::nullopt');
     if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
     return field.type.fields.map((bit) => {
       const member = bitMember(bit).type;
@@ -229,6 +232,18 @@ function errorChecks(protocol: Protocol): string[] {
       `throwsAs<UnknownEnumValueError>([] { ${decode('1, 0, 0, 0, 0, 0, 0, 0')}; }, "mood 0");`,
       `throwsAs<UnknownEnumValueError>([] { ${decode('1, 0, 6, 4, 0, 0, 0, 0')}; }, "team 3");`,
       `expect(static_cast<const Status&>(*${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}) == Status(), "unused bits");`,
+    );
+  }
+  if (protocol.name === 'conditional_fields') {
+    const draw = (setup: string) => `[] { Draw p; ${setup} p.encode(); }`;
+    const polygon = 'p.shape = Shape::Polygon; p.corner = Point(); p.points.emplace();';
+    checks.push(
+      'check<Draw>("Draw", [] { Draw p; p.shape = Shape::Circle; p.radius = 1.5f; return p; }(), true);',
+      `throwsAs<PacketRangeError>(${draw('p.shape = Shape::Circle;')}, "missing radius");`,
+      `throwsAs<PacketRangeError>(${draw('p.radius = 1.5f;')}, "radius without Circle");`,
+      `throwsAs<PacketRangeError>(${draw(`${polygon} p.closed = true; p.fill = 7u; p.dashed = false;`)}, "half a bit field group");`,
+      `throwsAs<PacketRangeError>(${draw(`${polygon} p.closed = false; p.width = static_cast<std::uint8_t>(1);`)}, "bit field group when closed is false");`,
+      'expect(static_cast<const Draw&>(*ConditionalFieldsProtocol::decodeFromClient(bytes({ 1, 0, 9 }))) == Draw(), "absent fields stay empty");',
     );
   }
   return checks.map((check) => `    ${check}`);
@@ -470,6 +485,13 @@ describe.skipIf(!compiler)('C++ round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 240_000);
+
+  it('writes conditional fields only when their condition holds', () => {
+    const lines = runRoundTrip(conditionalFields());
+    // Big-endian: opcode, Shape::Circle, then the f32 radius 1.5 and nothing else.
+    expect(lines).toContain('Draw 01013fc00000');
+    expect(lines).toContain('Draw 0100');
   }, 240_000);
 
   it('encodes and decodes every type in big-endian order', () => {

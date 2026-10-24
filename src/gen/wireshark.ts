@@ -3,8 +3,10 @@ import {
   bitGroups,
   bitLayout,
   findEnum,
+  hasConditions,
   wireSize,
   type BitsType,
+  type Condition,
   type ElementType,
   type Field,
   type Packet,
@@ -132,7 +134,7 @@ proto.prefs.tcp_port = Pref.uint("TCP port", DEFAULT_PORT, "TCP port carrying th
 proto.prefs.udp_port = Pref.uint("UDP port", DEFAULT_PORT, "UDP port carrying the protocol, 0 for none")
 proto.prefs.server_port = Pref.uint("Server port", DEFAULT_PORT, "Port the server listens on, used to tell the direction; 0 uses the TCP and UDP ports")
 
-${runtime(bitGroups(this.protocol).length > 0)}`;
+${runtime(bitGroups(this.protocol).length > 0, hasConditions(this.protocol))}`;
   }
 
   private packetEntry(packet: Packet): string {
@@ -143,16 +145,28 @@ ${runtime(bitGroups(this.protocol).length > 0)}`;
 
   private fieldList(fields: Field[], base: string): string {
     if (fields.length === 0) return '{}';
-    return `{\n${fields.map((f) => `  ${this.fieldEntry(f, base)},`).join('\n')}\n}`;
+    // Fields that a condition tests keep their value while the list is dissected.
+    const tested = new Set(fields.flatMap((f) => (f.condition ? [f.condition.field] : [])));
+    return `{\n${fields.map((f) => `  ${this.fieldEntry(f, base, tested)},`).join('\n')}\n}`;
   }
 
-  private fieldEntry(field: Field, base: string): string {
+  private fieldEntry(field: Field, base: string, tested: Set<string>): string {
     const abbrev = uniqueName(`${base}.${snakeCase(field.name)}`, this.used);
     const name = luaString(field.name);
     const { type } = field;
-    if (type.kind === 'bits') return this.bitsEntry(type, abbrev, name, base);
+    const extra: string[] = [];
+    if (field.condition) extra.push(`cond = ${conditionEntry(field.condition)}`);
+    if (type.kind === 'bits') return this.bitsEntry(type, abbrev, name, base, tested, extra);
+    if (tested.has(field.name)) {
+      const signed =
+        type.kind === 'enum'
+          ? findEnum(this.protocol, type.name).type.startsWith('i')
+          : type.kind === 'primitive' && type.name.startsWith('i');
+      extra.push(`key = ${luaString(field.name)}${signed ? ', signed = true' : ''}`);
+    }
+    const tail = extra.map((e) => `, ${e}`).join('');
     if (type.kind !== 'array' && type.kind !== 'fixedArray') {
-      return `{ pf = reg(${this.protoField(type, abbrev, name)}), t = ${this.descriptor(type)} }`;
+      return `{ pf = reg(${this.protoField(type, abbrev, name)}), t = ${this.descriptor(type)}${tail} }`;
     }
     const item = uniqueName(`${abbrev}.item`, this.used);
     const container =
@@ -163,29 +177,44 @@ ${runtime(bitGroups(this.protocol).length > 0)}`;
       type.kind === 'array'
         ? `count = ${PRIMITIVE_SIZES[type.length]}, min = ${wireSize(type.element, this.protocol).min}`
         : `size = ${type.size}`;
-    return `{ name = ${name}, pf = reg(${container}), item = reg(${this.protoField(type.element, item, name)}), t = ${this.descriptor(type.element)}, ${shape} }`;
+    return `{ name = ${name}, pf = reg(${container}), item = reg(${this.protoField(type.element, item, name)}), t = ${this.descriptor(type.element)}, ${shape}${tail} }`;
   }
 
   /** The integer as a hex field, with one masked field per bit field under it. */
-  private bitsEntry(type: BitsType, abbrev: string, name: string, base: string): string {
+  private bitsEntry(
+    type: BitsType,
+    abbrev: string,
+    name: string,
+    base: string,
+    tested: Set<string>,
+    extra: string[],
+  ): string {
     const size = PRIMITIVE_SIZES[type.base];
     const constructor = FIELD_CONSTRUCTORS[type.base];
     const bits = bitLayout(type.fields).map(({ field, offset }) => {
       const head = `${luaString(uniqueName(`${base}.${snakeCase(field.name)}`, this.used))}, ${luaString(field.name)}`;
       const mask = hex((2 ** field.bits - 1) * 2 ** offset, size * 2);
+      const position = `div = ${2 ** offset}, mod = ${2 ** field.bits}`;
+      const key = tested.has(field.name) ? `, key = ${luaString(field.name)}` : '';
       switch (field.type.kind) {
         case 'bool':
-          return `{ pf = reg(ProtoField.bool(${head}, ${size * 8}, nil, ${mask})) }`;
-        case 'uint':
-          return `{ pf = reg(ProtoField.${constructor}(${head}, base.DEC, nil, ${mask})) }`;
+        case 'uint': {
+          const pf =
+            field.type.kind === 'bool'
+              ? `ProtoField.bool(${head}, ${size * 8}, nil, ${mask})`
+              : `ProtoField.${constructor}(${head}, base.DEC, nil, ${mask})`;
+          return `{ pf = reg(${pf})${key ? `${key}, ${position}` : ''} }`;
+        }
         case 'enum': {
           const values = `ENUMS[${luaString(field.type.name)}]`;
-          return `{ pf = reg(ProtoField.${constructor}(${head}, base.DEC, ${values}, ${mask})), e = ${luaString(field.type.name)}, div = ${2 ** offset}, mod = ${2 ** field.bits} }`;
+          return `{ pf = reg(ProtoField.${constructor}(${head}, base.DEC, ${values}, ${mask})), e = ${luaString(field.type.name)}, ${position}${key} }`;
         }
       }
     });
+    if (type.fields.some((field) => tested.has(field.name))) extra.push('keys = true');
     const pf = `ProtoField.${constructor}(${luaString(abbrev)}, ${name}, base.HEX)`;
-    return `{ pf = reg(${pf}), t = { k = "bits", size = ${size}, bits = {\n    ${bits.join(',\n    ')},\n  } } }`;
+    const tail = extra.map((e) => `, ${e}`).join('');
+    return `{ pf = reg(${pf}), t = { k = "bits", size = ${size}, bits = {\n    ${bits.join(',\n    ')},\n  } }${tail} }`;
   }
 
   private protoField(type: ElementType, abbrev: string, name: string): string {
@@ -229,6 +258,13 @@ ${runtime(bitGroups(this.protocol).length > 0)}`;
   }
 }
 
+/** A bool condition holds when the value is not 0; otherwise the value must be in the set `v`. */
+function conditionEntry(condition: Condition): string {
+  if (condition.kind === 'true') return `{ f = ${luaString(condition.field)} }`;
+  const values = condition.values.map((v) => `[${v}] = true`).join(', ');
+  return `{ f = ${luaString(condition.field)}, v = { ${values} } }`;
+}
+
 function snakeCase(name: string): string {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
@@ -269,7 +305,71 @@ const BITS_BRANCH = `
     end
     return off + t.size`;
 
-function runtime(bits: boolean): string {
+const CONDITIONAL_FIELDS = `-- Reads the value of a field that a condition tests; 64-bit values are compared as numbers,
+-- which is exact for every value a condition can hold.
+local function read_key(tvb, off, size, signed)
+  if size == 8 then
+    local range = tvb(off, 8)
+    local value
+    if signed and LITTLE then
+      value = range:le_int64()
+    elseif signed then
+      value = range:int64()
+    elseif LITTLE then
+      value = range:le_uint64()
+    else
+      value = range:uint64()
+    end
+    return value:tonumber()
+  end
+  if signed then
+    return read_signed(tvb, off, size)
+  end
+  return read_unsigned(tvb, off, size)
+end
+
+-- A field that was not read never matches, so conditions on conditional fields chain.
+local function holds(cond, values)
+  local value = values[cond.f]
+  if value == nil then
+    return false
+  end
+  if cond.v then
+    return cond.v[value] == true
+  end
+  return value ~= 0
+end
+
+function dissect_fields(list, tvb, off, tree, depth)
+  local values = {}
+  for _, field in ipairs(list) do
+    if not field.cond or holds(field.cond, values) then
+      local start = off
+      off = dissect_field(field, tvb, off, tree, depth)
+      if field.key then
+        values[field.key] = read_key(tvb, start, field.t.size, field.signed)
+      end
+      if field.keys then
+        local raw = read_unsigned(tvb, start, field.t.size)
+        for _, bit in ipairs(field.t.bits) do
+          if bit.key then
+            values[bit.key] = math.floor(raw / bit.div) % bit.mod
+          end
+        end
+      end
+    end
+  end
+  return off
+end`;
+
+const PLAIN_FIELDS = `function dissect_fields(list, tvb, off, tree, depth)
+  for _, field in ipairs(list) do
+    off = dissect_field(field, tvb, off, tree, depth)
+  end
+  return off
+end`;
+
+function runtime(bits: boolean, conditions: boolean): string {
   return `local ABORT = {}
 
 -- Stands in for the tree while trying a direction, so a wrong guess shows nothing.
@@ -405,12 +505,7 @@ local function dissect_field(field, tvb, off, tree, depth)
   return off
 end
 
-function dissect_fields(list, tvb, off, tree, depth)
-  for _, field in ipairs(list) do
-    off = dissect_field(field, tvb, off, tree, depth)
-  end
-  return off
-end
+${conditions ? CONDITIONAL_FIELDS : PLAIN_FIELDS}
 
 -- Lower is better: problems found, plus one for left-over bytes, plus a lot for giving up.
 local function probe(entry, tvb)

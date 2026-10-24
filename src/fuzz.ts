@@ -6,9 +6,11 @@ import {
   findStruct,
   type BitField,
   type BitsType,
+  type Condition,
   type Direction,
   type Endian,
   type Enum,
+  type Field,
   type FieldType,
   type LengthType,
   type Packet,
@@ -314,6 +316,120 @@ class Builder {
     return out;
   }
 
+  private readUint(bytes: Uint8Array): bigint {
+    let value = 0n;
+    for (let i = 0; i < bytes.length; i++) {
+      const byte = bytes[this.protocol.endian === 'little' ? bytes.length - 1 - i : i]!;
+      value = (value << 8n) | BigInt(byte);
+    }
+    return value;
+  }
+
+  /** Where the member a condition tests lives: its field, and the bit field inside it if any. */
+  private locate(fields: Field[], name: string): { index: number; bit?: number } {
+    for (const [index, field] of fields.entries()) {
+      if (field.name === name) return { index };
+      if (field.type.kind === 'bits') {
+        const bit = field.type.fields.findIndex((b) => b.name === name);
+        if (bit >= 0) return { index, bit };
+      }
+    }
+    throw new Error(`unknown condition field ${name}`);
+  }
+
+  /** The value a condition tests, read back from the encoded fields; undefined while absent. */
+  private targetValue(
+    fields: Field[],
+    parts: (Uint8Array | undefined)[],
+    name: string,
+  ): bigint | undefined {
+    const { index, bit } = this.locate(fields, name);
+    const bytes = parts[index];
+    if (!bytes) return undefined;
+    const raw = this.readUint(bytes);
+    const { type } = fields[index]!;
+    if (type.kind === 'bits') {
+      const { field, offset } = bitLayout(type.fields)[bit!]!;
+      return (raw >> BigInt(offset)) & ((1n << BigInt(field.bits)) - 1n);
+    }
+    const base =
+      type.kind === 'enum'
+        ? findEnum(this.protocol, type.name).type
+        : type.kind === 'primitive'
+          ? type.name
+          : 'u8';
+    return base.startsWith('i') ? BigInt.asIntN(bytes.length * 8, raw) : raw;
+  }
+
+  private holds(fields: Field[], parts: (Uint8Array | undefined)[], condition: Condition): boolean {
+    const value = this.targetValue(fields, parts, condition.field);
+    if (value === undefined) return false;
+    return condition.kind === 'true'
+      ? value !== 0n
+      : condition.values.some((v) => BigInt(v) === value);
+  }
+
+  /** The fields as the wire carries them: one encoding per field, undefined where a condition fails. */
+  private place(fields: Field[], parts: Uint8Array[]): (Uint8Array | undefined)[] {
+    const placed: (Uint8Array | undefined)[] = [];
+    fields.forEach((field, i) => {
+      placed.push(
+        !field.condition || this.holds(fields, placed, field.condition) ? parts[i] : undefined,
+      );
+    });
+    return placed;
+  }
+
+  private joined(fields: Field[], parts: Uint8Array[]): Uint8Array[] {
+    return this.place(fields, parts).filter((part) => part !== undefined);
+  }
+
+  /** Writes `value` into the member a condition tests, after making that member present. */
+  private setTarget(fields: Field[], parts: Uint8Array[], name: string, value: bigint): boolean {
+    const { index, bit } = this.locate(fields, name);
+    const field = fields[index]!;
+    if (field.condition && !this.satisfy(fields, parts, field.condition)) return false;
+    const { type } = field;
+    if (type.kind === 'bits') {
+      const { field: target, offset } = bitLayout(type.fields)[bit!]!;
+      const mask = ((1n << BigInt(target.bits)) - 1n) << BigInt(offset);
+      const raw = this.readUint(parts[index]!);
+      parts[index] = this.uint(
+        (raw & ~mask) | (value << BigInt(offset)),
+        PRIMITIVE_SIZES[type.base],
+      );
+    } else {
+      parts[index] = this.uint(value, parts[index]!.length);
+    }
+    return true;
+  }
+
+  private satisfy(fields: Field[], parts: Uint8Array[], condition: Condition): boolean {
+    const value = condition.kind === 'true' ? 1n : BigInt(condition.values[0]!);
+    return this.setTarget(fields, parts, condition.field, value);
+  }
+
+  /** Gives the tested member a value outside the condition; false when every value matches. */
+  private fail(fields: Field[], parts: Uint8Array[], condition: Condition): boolean {
+    if (condition.kind === 'true') return this.setTarget(fields, parts, condition.field, 0n);
+    const { index, bit } = this.locate(fields, condition.field);
+    const { type } = fields[index]!;
+    let candidates: number[];
+    if (type.kind === 'bits') {
+      const target = type.fields[bit!]!;
+      candidates =
+        target.type.kind === 'enum'
+          ? findEnum(this.protocol, target.type.name).values.map((v) => v.value)
+          : [0, 1, 2 ** target.bits - 1];
+    } else if (type.kind === 'enum') {
+      candidates = findEnum(this.protocol, type.name).values.map((v) => v.value);
+    } else {
+      candidates = type.kind === 'primitive' && type.name.startsWith('i') ? [0, 1, -1] : [0, 1, 2];
+    }
+    const value = candidates.find((v) => !condition.values.includes(v));
+    return value !== undefined && this.setTarget(fields, parts, condition.field, BigInt(value));
+  }
+
   private prefix(type: LengthType, value: number): Uint8Array {
     return this.uint(BigInt(value), PRIMITIVE_SIZES[type]);
   }
@@ -357,12 +473,15 @@ class Builder {
         const pick = profile === 'max' ? values[values.length - 1]! : values[0]!;
         return this.enumBytes(definition, pick.value);
       }
-      case 'struct':
+      case 'struct': {
+        const { fields } = findStruct(this.protocol, type.name);
         return concat(
-          findStruct(this.protocol, type.name).fields.map((f) =>
-            this.profile(f.type, profile, depth + 1),
+          this.joined(
+            fields,
+            fields.map((f) => this.profile(f.type, profile, depth + 1)),
           ),
         );
+      }
       case 'array': {
         // The element is not built for an empty array: it may contain this array again.
         if (profile !== 'max' || depth >= MAX_DEPTH) return this.prefix(type.length, 0);
@@ -476,23 +595,10 @@ class Builder {
       case 'struct': {
         if (depth >= MAX_DEPTH) return [];
         const fields = findStruct(this.protocol, type.name).fields;
-        const defaults = fields.map((f) => this.profile(f.type, 'zero', depth + 1));
-        const total = defaults.reduce((sum, d) => sum + d.length, 0);
-        const result: Variant[] = this.profiles(type, mode, depth);
-        fields.forEach((field, j) => {
-          const others = total - defaults[j]!.length;
-          for (const v of this.variants(field.type, mode, room - others, depth + 1)) {
-            result.push(
-              this.embed(
-                `${field.name}-${v.label}`,
-                defaults.slice(0, j),
-                v,
-                defaults.slice(j + 1),
-              ),
-            );
-          }
-        });
-        return result;
+        return [
+          ...this.profiles(type, mode, depth),
+          ...this.listVariants(fields, mode, room, depth + 1),
+        ];
       }
       case 'array': {
         if (depth >= MAX_DEPTH) return [];
@@ -539,6 +645,56 @@ class Builder {
         return result;
       }
     }
+  }
+
+  /**
+   * Each field in turn at its edge values, the others at their zero profile. A conditional field
+   * first gets its condition met; when valid samples are asked for, it is also shown present at
+   * its zero profile and absent.
+   */
+  private listVariants(fields: Field[], mode: Mode, room: number, depth: number): Variant[] {
+    const defaults = fields.map((f) => this.profile(f.type, 'zero', depth));
+    const result: Variant[] = [];
+    const build = (label: string, parts: Uint8Array[], j: number, patch?: Patch) => {
+      const placed = this.place(fields, parts);
+      const inner = placed[j];
+      if (inner === undefined) return;
+      const present = (list: (Uint8Array | undefined)[]) =>
+        list.filter((part) => part !== undefined);
+      result.push(
+        this.embed(
+          label,
+          present(placed.slice(0, j)),
+          { label, bytes: inner, patch },
+          present(placed.slice(j + 1)),
+        ),
+      );
+    };
+    fields.forEach((field, j) => {
+      const parts = defaults.slice();
+      if (field.condition && !this.satisfy(fields, parts, field.condition)) return;
+      const size = this.joined(fields, parts).reduce((sum, d) => sum + d.length, 0);
+      const others = size - parts[j]!.length;
+      if (field.condition && mode === 'valid') {
+        build(`${field.name}-present`, parts, j);
+        const absent = defaults.slice();
+        if (this.fail(fields, absent, field.condition)) {
+          const placed = this.place(fields, absent);
+          if (placed[j] === undefined) {
+            result.push({
+              label: `${field.name}-absent`,
+              bytes: concat(placed.filter((part) => part !== undefined)),
+            });
+          }
+        }
+      }
+      for (const v of this.variants(field.type, mode, room - others, depth)) {
+        const candidate = parts.slice();
+        candidate[j] = v.bytes;
+        build(`${field.name}-${v.label}`, candidate, j, v.patch);
+      }
+    });
+    return result;
   }
 
   private profiles(type: FieldType, mode: Mode, depth: number): Variant[] {
@@ -613,36 +769,23 @@ class Builder {
     return [make('one', Uint8Array.of(0xff)), ...(fit > 0 ? [make(label, filler)] : [])];
   }
 
-  /** Opcode followed by the fields at their defaults, with field `index` replaced. */
-  private assemble(packet: Packet, defaults: Uint8Array[], index: number, v: Variant) {
+  /** Opcode followed by the fields, each field in turn at its edge values. */
+  private fieldVariants(packet: Packet, mode: Mode): Variant[] {
     const head = this.opcodeBytes(packet.opcode);
-    const before = [head, ...defaults.slice(0, index)];
-    const bytes = concat([...before, v.bytes, ...defaults.slice(index + 1)]);
-    const start = before.reduce((sum, part) => sum + part.length, 0);
-    return { bytes, patch: v.patch && { ...v.patch, offset: v.patch.offset + start } };
-  }
-
-  private fieldVariants(packet: Packet, mode: Mode) {
-    const defaults = packet.fields.map((f) => this.profile(f.type, 'zero', 0));
-    const total =
-      PRIMITIVE_SIZES[this.protocol.opcode] + defaults.reduce((sum, d) => sum + d.length, 0);
-    const result: { label: string; bytes: Uint8Array; patch?: Patch }[] = [];
-    packet.fields.forEach((field, j) => {
-      const room = this.maxSize - (total - defaults[j]!.length);
-      for (const v of this.variants(field.type, mode, room, 0)) {
-        result.push({
-          label: `${field.name}-${v.label}`,
-          ...this.assemble(packet, defaults, j, v),
-        });
-      }
-    });
-    return result;
+    const room = this.maxSize - head.length;
+    return this.listVariants(packet.fields, mode, room, 0).map((v) =>
+      this.embed(v.label, [head], v, []),
+    );
   }
 
   private wholePacket(packet: Packet, profile: Profile): Uint8Array {
+    const { fields } = packet;
     return concat([
       this.opcodeBytes(packet.opcode),
-      ...packet.fields.map((f) => this.profile(f.type, profile, 0)),
+      ...this.joined(
+        fields,
+        fields.map((f) => this.profile(f.type, profile, 0)),
+      ),
     ]);
   }
 
@@ -703,6 +846,23 @@ class Builder {
         });
       }
     }
+
+    // A condition that holds while the field after it is cut off.
+    const defaults = packet.fields.map((f) => this.profile(f.type, 'zero', 0));
+    packet.fields.forEach((field, j) => {
+      const parts = defaults.slice();
+      if (!field.condition || !this.satisfy(packet.fields, parts, field.condition)) return;
+      const placed = this.place(packet.fields, parts);
+      if (!placed[j] || placed[j].length === 0) return;
+      const before = placed.slice(0, j).filter((part) => part !== undefined);
+      this.add(cuts, {
+        ...base,
+        name: [packet.direction, packet.name, 'missing', field.name],
+        data: concat([this.opcodeBytes(packet.opcode), ...before]),
+        error: 'truncated',
+        kind: 'truncated',
+      });
+    });
 
     const whole = this.wholePacket(packet, 'max');
     if (whole.length > this.maxSize) {
@@ -783,7 +943,7 @@ class Builder {
     for (let i = 1; i <= this.count; i++) {
       const data = concat([
         this.opcodeBytes(packet.opcode),
-        ...packet.fields.map((f) => this.random(f.type, rng, 0)),
+        ...this.randomFields(packet.fields, rng, 0),
       ]);
       this.add(out, {
         direction: packet.direction,
@@ -833,9 +993,7 @@ class Builder {
       }
       case 'struct':
         return concat(
-          findStruct(this.protocol, type.name).fields.map((f) =>
-            this.random(f.type, rng, depth + 1),
-          ),
+          this.randomFields(findStruct(this.protocol, type.name).fields, rng, depth + 1),
         );
       case 'array': {
         const items = depth >= MAX_DEPTH ? 0 : rng.below(Math.min(LENGTH_MAX[type.length], 6) + 1);
@@ -858,6 +1016,16 @@ class Builder {
           }),
         );
     }
+  }
+
+  /** Random values in order; a field whose condition fails takes no bytes and no random numbers. */
+  private randomFields(fields: Field[], rng: Rng, depth: number): Uint8Array[] {
+    const parts: (Uint8Array | undefined)[] = [];
+    for (const field of fields) {
+      const on = !field.condition || this.holds(fields, parts, field.condition);
+      parts.push(on ? this.random(field.type, rng, depth) : undefined);
+    }
+    return parts.filter((part) => part !== undefined);
   }
 
   private randomBits(name: PrimitiveType, rng: Rng): bigint {

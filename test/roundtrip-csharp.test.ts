@@ -8,13 +8,14 @@ import { pascalCase } from '../src/gen/common.js';
 import {
   INT_RANGES,
   bitMember,
+  fieldMembers,
   findEnum,
   findStruct,
   type Field,
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
 
 const dotnetVersion = spawnSync('dotnet', ['--version'], { encoding: 'utf8' });
 const sdkMajor = dotnetVersion.status === 0 ? Number.parseInt(dotnetVersion.stdout, 10) : 0;
@@ -42,7 +43,9 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
 
 /** Constructor arguments for the fields; a bit field group gives one per bit field. */
 function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  const present = presentFields(protocol, fields, variant);
   return fields.flatMap((field) => {
+    if (!present.has(field)) return fieldMembers(field).map(() => 'null');
     if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
     return field.type.fields.map((bit) => {
       if (bit.type.kind !== 'uint') return sample(protocol, bitMember(bit).type, variant, depth);
@@ -137,6 +140,17 @@ function errorChecks(protocol: Protocol): string[] {
       `Throws<InvalidDataException>(() => ${decode('1, 0, 0, 0, 0, 0, 0, 0')}, "mood 0");`,
       `Throws<InvalidDataException>(() => ${decode('1, 0, 6, 4, 0, 0, 0, 0')}, "team 3");`,
       `Expect(new Status().Equals(${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}), "unused bits");`,
+    );
+  }
+  if (protocol.name === 'conditional_fields') {
+    const polygon = 'Shape = Shape.Polygon, Corner = new Point(), Points = new List<Point>()';
+    checks.push(
+      'Check(new Draw { Shape = Shape.Circle, Radius = 1.5f }, true);',
+      'Throws<ArgumentException>(() => new Draw { Shape = Shape.Circle }.Encode(), "missing radius");',
+      'Throws<ArgumentException>(() => new Draw { Radius = 1.5f }.Encode(), "radius without Circle");',
+      `Throws<ArgumentException>(() => new Draw { ${polygon}, Closed = true, Fill = 7, Dashed = false }.Encode(), "half a bit field group");`,
+      `Throws<ArgumentException>(() => new Draw { ${polygon}, Closed = false, Width = 1 }.Encode(), "bit field group when closed is false");`,
+      'Expect(new Draw().Equals(ConditionalFieldsProtocol.DecodeFromClient(new byte[] { 1, 0, 9 })), "absent fields stay null");',
     );
   }
   return checks.map((check) => `        ${check}`);
@@ -315,6 +329,13 @@ describe.skipIf(!hasDotnet)('C# round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 240_000);
+
+  it('writes conditional fields only when their condition holds', () => {
+    const lines = runRoundTrip(conditionalFields());
+    // Big-endian: opcode, Shape.Circle, then the f32 radius 1.5 and nothing else.
+    expect(lines).toContain('Draw 01013fc00000');
+    expect(lines).toContain('Draw 0100');
   }, 240_000);
 
   it('encodes and decodes every type in big-endian order', () => {

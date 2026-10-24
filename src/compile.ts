@@ -6,6 +6,7 @@ import {
   type BitField,
   type BitFieldType,
   type BitsBaseType,
+  type Condition,
   type Direction,
   type ElementType,
   type Endian,
@@ -351,12 +352,27 @@ class Compiler {
       }
       seen.set(normalized, name);
     };
-    for (const item of entry.value.items as Node[]) {
+    // Names of every field so far, including ones that did not compile, so a condition on a
+    // broken field does not add a second error.
+    const names: string[] = [];
+    const items = entry.value.items as Node[];
+    const declared = items.map((item) => this.declaredNames(item));
+    for (const [index, item] of items.entries()) {
       const field = this.field(item);
-      if (!field) continue;
+      const later = new Set(declared.slice(index + 1).flat());
+      const condition =
+        field.ifEntry && field.name !== undefined
+          ? this.condition(field.ifEntry, declared[index]!, fields, names, later)
+          : undefined;
+      names.push(...declared[index]!);
+      if (!field.field || (field.ifEntry && !condition)) continue;
       const { name, type } = field.field;
-      claim(name, field.nameNode);
+      if (condition) field.field.condition = condition;
+      claim(name, field.nameNode!);
       this.locations.set(`${owner}/field:${name}`, this.position(field.nameNode));
+      if (field.ifEntry) {
+        this.locations.set(`${owner}/field:${name}/if`, this.position(field.ifEntry.value));
+      }
       // Bit fields become members next to the other fields, so they share one namespace.
       for (const bit of type.kind === 'bits' ? type.fields : []) {
         const node = this.bitNodes.get(bit)!;
@@ -368,9 +384,36 @@ class Compiler {
     return fields;
   }
 
-  private field(item: Node): { field: Field; nameNode: Node } | undefined {
-    const entries = this.entries(item, 'field', ['name', 'type', 'length', 'size', 'bits', 'doc']);
-    if (!entries) return undefined;
+  /** The name of a field and of its bit fields, read without checking them. */
+  private declaredNames(item: Node): string[] {
+    const get = (node: unknown, key: string): unknown =>
+      isMap(node)
+        ? node.items.find((pair) => isScalar(pair.key) && pair.key.value === key)?.value
+        : undefined;
+    const nameOf = (node: unknown): string[] => {
+      const name = get(node, 'name');
+      return isScalar(name) && typeof name.value === 'string' ? [name.value] : [];
+    };
+    const bits = get(item, 'bits');
+    return [...nameOf(item), ...(isSeq(bits) ? bits.items.flatMap(nameOf) : [])];
+  }
+
+  private field(item: Node): {
+    field?: Field;
+    name?: string;
+    nameNode?: Node;
+    ifEntry?: Entry;
+  } {
+    const entries = this.entries(item, 'field', [
+      'name',
+      'type',
+      'length',
+      'size',
+      'bits',
+      'if',
+      'doc',
+    ]);
+    if (!entries) return {};
     const nameEntry = this.require(entries, 'name', item, 'field');
     const name = nameEntry && this.fieldName(nameEntry, 'field');
     const typeEntry = this.require(entries, 'type', item, name ? `field '${name}'` : 'field');
@@ -381,8 +424,223 @@ class Compiler {
         ? this.bitsType(typeEntry, bitsEntry, entries)
         : this.fieldType(typeEntry, entries));
     const doc = this.optionalString(entries.get('doc'), "'doc'");
-    if (!nameEntry || name === undefined || !type) return undefined;
-    return { field: { name, type, doc }, nameNode: nameEntry.value ?? nameEntry.key };
+    const ifEntry = entries.get('if');
+    const nameNode = nameEntry && (nameEntry.value ?? nameEntry.key);
+    if (!nameEntry || name === undefined || !type) return { name, nameNode, ifEntry };
+    return { field: { name, type, doc }, name, nameNode, ifEntry };
+  }
+
+  /**
+   * Reads `if: flag`, `if: { field: kind, equals: A }` or `if: { field: kind, in: [A, B] }`.
+   * `own` is the name of the field followed by its bit fields; `earlier` holds the fields before
+   * it, `names` also the ones that did not compile, and `later` the ones after it.
+   */
+  private condition(
+    entry: Entry,
+    own: string[],
+    earlier: Field[],
+    names: string[],
+    later: Set<string>,
+  ): Condition | undefined {
+    const node = entry.value ?? entry.key;
+    let targetName: string | undefined;
+    let targetNode: Node = node;
+    let valueEntry: Entry | undefined;
+    let list = false;
+    if (isScalar(entry.value) && typeof entry.value.value === 'string') {
+      targetName = this.string(entry, "'if'");
+    } else if (isMap(entry.value)) {
+      const entries = this.entries(entry.value, 'condition', ['field', 'equals', 'in']);
+      if (!entries) return undefined;
+      const fieldEntry = this.require(entries, 'field', entry.value, 'condition');
+      targetName = fieldEntry && this.string(fieldEntry, "condition 'field'");
+      if (fieldEntry?.value) targetNode = fieldEntry.value;
+      const equals = entries.get('equals');
+      const among = entries.get('in');
+      if (equals && among) {
+        this.error(among.key, "'equals' and 'in' cannot be combined");
+        return undefined;
+      }
+      valueEntry = equals ?? among;
+      list = among !== undefined;
+      if (!valueEntry) {
+        this.error(entry.value, "condition is missing 'equals' or 'in'");
+        return undefined;
+      }
+    } else {
+      this.error(node, "'if' must be a field name, or a mapping with 'field' and 'equals' or 'in'");
+      return undefined;
+    }
+    if (targetName === undefined) return undefined;
+
+    const owner = own[0]!;
+    if (targetName === owner) {
+      this.error(targetNode, `field '${owner}' cannot be its own condition`);
+      return undefined;
+    }
+    if (own.includes(targetName)) {
+      this.error(targetNode, `field '${owner}' cannot test its own bit field '${targetName}'`);
+      return undefined;
+    }
+    let target: { type: FieldType } | { bit: BitField } | undefined;
+    for (const field of earlier) {
+      if (field.name === targetName) target = { type: field.type };
+      for (const bit of field.type.kind === 'bits' ? field.type.fields : []) {
+        if (bit.name === targetName) target = { bit };
+      }
+    }
+    if (!target) {
+      if (later.has(targetName)) {
+        this.error(
+          targetNode,
+          `condition of field '${owner}' refers to '${targetName}', which comes after it; a condition can only test earlier fields`,
+        );
+      } else if (!names.includes(targetName)) {
+        const suggestion = names.find((n) => n.toLowerCase() === targetName.toLowerCase());
+        this.error(
+          targetNode,
+          `condition of field '${owner}' refers to unknown field '${targetName}'` +
+            (suggestion ? `; did you mean '${suggestion}'?` : ''),
+        );
+      }
+      return undefined;
+    }
+
+    const kind = this.conditionKind(target);
+    const what = `'${targetName}'`;
+    if (kind.kind === 'group') {
+      this.error(targetNode, `${what} is a group of bit fields; test one of its bit fields`);
+      return undefined;
+    }
+    if (kind.kind === 'other') {
+      this.error(
+        targetNode,
+        `condition field ${what} must be a bool, an integer or an enum, not ${kind.text}`,
+      );
+      return undefined;
+    }
+    if (kind.kind === 'bool') {
+      if (valueEntry) {
+        this.error(valueEntry.key, `${what} is a bool; write 'if: ${targetName}' to test it`);
+        return undefined;
+      }
+      return { kind: 'true', field: targetName };
+    }
+    if (!valueEntry) {
+      this.error(
+        node,
+        `${what} is ${kind.kind === 'enum' ? 'an enum' : 'an integer'}; give the values to match with 'equals' or 'in'`,
+      );
+      return undefined;
+    }
+
+    let valueNodes: (Node | null)[];
+    if (list) {
+      if (!isSeq(valueEntry.value) || valueEntry.value.items.length === 0) {
+        this.error(valueEntry.value ?? valueEntry.key, "'in' must be a non-empty list");
+        return undefined;
+      }
+      valueNodes = valueEntry.value.items as Node[];
+    } else {
+      valueNodes = [valueEntry.value];
+    }
+    const values: number[] = [];
+    let ok = true;
+    for (const valueNode of valueNodes) {
+      const value = this.conditionValue(valueNode ?? valueEntry.key, kind);
+      if (value === undefined) {
+        ok = false;
+      } else if (values.includes(value)) {
+        const raw = isScalar(valueNode) ? valueNode.value : value;
+        const text = typeof raw === 'string' ? `'${raw}'` : String(raw);
+        this.error(valueNode ?? valueEntry.key, `${text} is listed twice in the condition`);
+        ok = false;
+      } else {
+        values.push(value);
+      }
+    }
+    return ok ? { kind: 'in', field: targetName, values } : undefined;
+  }
+
+  private conditionKind(
+    target: { type: FieldType } | { bit: BitField },
+  ):
+    | { kind: 'bool' }
+    | { kind: 'group' }
+    | { kind: 'int'; min: number; max: number; range: string }
+    | { kind: 'enum'; definition: Enum | undefined }
+    | { kind: 'other'; text: string } {
+    if ('bit' in target) {
+      const { bit } = target;
+      if (bit.type.kind === 'bool') return { kind: 'bool' };
+      if (bit.type.kind === 'enum') {
+        return { kind: 'enum', definition: this.enums.get(bit.type.name) };
+      }
+      const max = 2 ** bit.bits - 1;
+      return { kind: 'int', min: 0, max, range: `${bit.bits} bits (0..${max})` };
+    }
+    const field = target.type;
+    switch (field.kind) {
+      case 'bits':
+        return { kind: 'group' };
+      case 'enum':
+        return { kind: 'enum', definition: this.enums.get(field.name) };
+      case 'primitive': {
+        if (field.name === 'bool') return { kind: 'bool' };
+        if (field.name === 'f32' || field.name === 'f64') {
+          return { kind: 'other', text: field.name };
+        }
+        // 64-bit values are kept to the integers a JavaScript number holds exactly.
+        const [min, max] =
+          field.name === 'u64'
+            ? [0, Number.MAX_SAFE_INTEGER]
+            : field.name === 'i64'
+              ? [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]
+              : INT_RANGES[field.name];
+        return { kind: 'int', min, max, range: `${field.name} (${min}..${max})` };
+      }
+      case 'string':
+      case 'bytes':
+      case 'fixedBytes':
+        return { kind: 'other', text: field.kind === 'string' ? 'string' : 'bytes' };
+      case 'struct':
+        return { kind: 'other', text: `struct '${field.name}'` };
+      case 'array':
+      case 'fixedArray':
+        return { kind: 'other', text: 'an array' };
+    }
+  }
+
+  private conditionValue(
+    node: Node,
+    kind:
+      | { kind: 'int'; min: number; max: number; range: string }
+      | { kind: 'enum'; definition: Enum | undefined },
+  ): number | undefined {
+    const value = isScalar(node) ? node.value : undefined;
+    if (kind.kind === 'enum') {
+      // The enum itself failed to compile and has its own error.
+      if (!kind.definition) return undefined;
+      const member = kind.definition.values.find((v) => v.name === value);
+      if (typeof value !== 'string' || !member) {
+        const names = kind.definition.values.map((v) => v.name).join(', ');
+        this.error(
+          node,
+          `${typeof value === 'string' ? `'${value}'` : String(value)} is not a value of enum '${kind.definition.name}'; expected one of: ${names}`,
+        );
+        return undefined;
+      }
+      return member.value;
+    }
+    if (typeof value !== 'number' || !Number.isInteger(value)) {
+      this.error(node, 'condition value must be an integer');
+      return undefined;
+    }
+    if (value < kind.min || value > kind.max) {
+      this.error(node, `${value} does not fit in ${kind.range}`);
+      return undefined;
+    }
+    return value;
   }
 
   /** Returns the name of a field or bit field, or undefined after reporting why it is unusable. */

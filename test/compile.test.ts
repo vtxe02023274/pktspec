@@ -339,4 +339,96 @@ structs:
       "15:17 field 'o_k' clashes with 'ok' once converted to camelCase",
     ]);
   });
+
+  it('resolves conditions on bools, integers, enums and bit fields', () => {
+    const { protocol, diagnostics, locations } = compile(load('fixtures/conditional-fields.yaml'));
+    expect(diagnostics).toEqual([]);
+    const draw = protocol!.packets.find((p) => p.name === 'Draw')!;
+    expect(draw.fields.map((f) => [f.name, f.condition])).toEqual([
+      ['shape', undefined],
+      ['radius', { kind: 'in', field: 'shape', values: [1] }],
+      ['corner', { kind: 'in', field: 'shape', values: [2, 3] }],
+      ['points', { kind: 'in', field: 'shape', values: [3] }],
+      ['closed', { kind: 'in', field: 'shape', values: [3] }],
+      ['fill', { kind: 'true', field: 'closed' }],
+      ['style', { kind: 'true', field: 'closed' }],
+      ['dash', { kind: 'true', field: 'dashed' }],
+      ['label', { kind: 'in', field: 'width', values: [0, 15] }],
+    ]);
+    const profile = protocol!.packets.find((p) => p.name === 'Profile')!;
+    expect(profile.fields.find((f) => f.name === 'avatar')!.condition).toEqual({
+      kind: 'in',
+      field: 'id',
+      values: [0, 9007199254740991],
+    });
+    expect(locations!.get('packet:Draw/field:radius/if')).toEqual({ line: 39, column: 40 });
+  });
+
+  it('checks what a condition refers to and the values it compares', () => {
+    const source = `${header}enums:
+  E: { type: u8, values: { A: 0, B: 1 } }
+structs:
+  S:
+    fields:
+      - { name: a, type: E }
+      - { name: b, type: u8, if: a }
+      - { name: c, type: u8, if: { field: a, equals: C } }
+      - { name: d, type: u8, if: { field: a, in: [A, A] } }
+      - { name: e, type: u8, if: { field: z, equals: 1 } }
+      - { name: f, type: u8, if: { field: g, equals: 1 } }
+      - { name: g, type: u8 }
+      - { name: h, type: u8, if: h }
+      - { name: i, type: string }
+      - { name: j, type: u8, if: i }
+      - { name: k, type: bool }
+      - { name: l, type: u8, if: { field: k, equals: 1 } }
+      - { name: m, type: u8, if: { field: g, equals: 256 } }
+      - { name: n, type: u8, if: { field: g, in: [] } }
+      - { name: o, type: u8, if: { field: g, equals: 1, in: [2] } }
+      - { name: p, type: u8, if: { field: g } }
+      - name: q
+        type: u8
+        bits: [{ name: r, bits: 2 }]
+      - { name: s, type: u8, if: q }
+      - { name: t, type: u8, if: { field: r, equals: 4 } }
+      - { name: u, type: u8, if: [g] }
+      - { name: v, type: u8, if: { field: G, equals: 1 } }
+      - { name: w, type: u8, if: { field: g, equals: x } }
+      - { name: x, type: Missing }
+      - { name: y, type: u8, if: x }
+      - { name: z, type: u8, if: { field: g, equals: 1, other: 2 } }
+      - { name: aa, type: f32 }
+      - { name: ab, type: u8, if: { field: aa, equals: 1 } }
+      - { name: ac, type: u64 }
+      - { name: ad, type: u8, if: { field: ac, equals: 9007199254740992 } }
+      - name: ae
+        type: u8
+        if: af
+        bits: [{ name: af, type: bool }]
+`;
+    expect(errors(source)).toEqual([
+      "8:34 'a' is an enum; give the values to match with 'equals' or 'in'",
+      "9:54 'C' is not a value of enum 'E'; expected one of: A, B",
+      "10:54 'A' is listed twice in the condition",
+      "11:43 condition of field 'e' refers to 'z', which comes after it; a condition can only test earlier fields",
+      "12:43 condition of field 'f' refers to 'g', which comes after it; a condition can only test earlier fields",
+      "14:34 field 'h' cannot be its own condition",
+      "16:34 condition field 'i' must be a bool, an integer or an enum, not string",
+      "18:46 'k' is a bool; write 'if: k' to test it",
+      '19:54 256 does not fit in u8 (0..255)',
+      "20:50 'in' must be a non-empty list",
+      "21:57 'equals' and 'in' cannot be combined",
+      "22:34 condition is missing 'equals' or 'in'",
+      "26:34 'q' is a group of bit fields; test one of its bit fields",
+      '27:54 4 does not fit in 2 bits (0..3)',
+      "28:34 'if' must be a field name, or a mapping with 'field' and 'equals' or 'in'",
+      "29:43 condition of field 'v' refers to unknown field 'G'; did you mean 'g'?",
+      '30:54 condition value must be an integer',
+      "31:26 unknown type 'Missing'",
+      "33:57 unknown key 'other' in condition; expected one of: field, equals, in",
+      "35:44 condition field 'aa' must be a bool, an integer or an enum, not f32",
+      '37:56 9007199254740992 does not fit in u64 (0..9007199254740991)',
+      "40:13 field 'ae' cannot test its own bit field 'af'",
+    ]);
+  });
 });

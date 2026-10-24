@@ -407,6 +407,110 @@ describe('diff bit fields', () => {
   });
 });
 
+describe('diff conditional fields', () => {
+  const kinds = (values = 'A: 0, B: 1') =>
+    `enums:\n  Kind:\n    type: u8\n    values: { ${values} }\n`;
+  const fields = (rest: string, values?: string) =>
+    proto(
+      kinds(values) +
+        packets(
+          packet(
+            `{ name: k, type: Kind }, { name: on, type: bool }, { name: n, type: u8 }, ${rest}`,
+          ),
+        ),
+    );
+  const base = fields('{ name: x, type: u16, if: on }');
+
+  it('flags an added, removed or changed condition as breaking', () => {
+    const plain = fields('{ name: x, type: u16 }');
+    const added = diff(plain, base);
+    expect(added.map((c) => `${c.severity} ${c.rule} ${c.path}`)).toEqual([
+      'breaking condition-added A.x',
+    ]);
+    expect(added[0]!.message).toBe(
+      "packet 'A' field 'x': now only present when 'on' is true; old versions always read it",
+    );
+    expect(brief(base, plain)).toEqual(['breaking condition-removed A.x']);
+    expect(brief(base, fields('{ name: x, type: u16, if: { field: k, equals: B } }'))).toEqual([
+      'breaking condition-changed A.x',
+    ]);
+    const values = (list: string) =>
+      fields(`{ name: x, type: u16, if: { field: n, in: [${list}] } }`);
+    const changed = diff(values('1, 2'), values('1, 2, 3'));
+    expect(changed.map((c) => c.rule)).toEqual(['condition-changed']);
+    expect(changed[0]!.message).toBe(
+      "packet 'A' field 'x': condition changed from 'n' is one of 1, 2 to 'n' is one of 1, 2, 3",
+    );
+  });
+
+  it('compares conditions by value and by the position of the field they test', () => {
+    const values = (list: string) =>
+      fields(`{ name: x, type: u16, if: { field: k, in: [${list}] } }`);
+    expect(diff(values('A, B'), values('B, A'))).toEqual([]);
+    expect(
+      diff(values('B'), fields('{ name: x, type: u16, if: { field: k, equals: B } }')),
+    ).toEqual([]);
+    // Renaming the tested field keeps the condition; the rename itself is info.
+    const renamed = proto(
+      kinds() +
+        packets(
+          packet(
+            '{ name: k, type: Kind }, { name: enabled, type: bool }, { name: n, type: u8 }, { name: x, type: u16, if: enabled }',
+          ),
+        ),
+    );
+    expect(brief(base, renamed)).toEqual(['info field-renamed A.enabled']);
+  });
+
+  it('flags a new conditional field as breaking', () => {
+    expect(
+      brief(
+        fields('{ name: y, type: u8 }'),
+        fields('{ name: x, type: u16, if: on }, { name: y, type: u8 }'),
+      ),
+    ).toEqual(['breaking field-added A.x']);
+  });
+
+  it('treats a new field as compatible when it is only present for new enum values', () => {
+    const before = fields('{ name: y, type: u8 }');
+    const after = fields(
+      '{ name: x, type: u16, if: { field: k, equals: C } }, { name: y, type: u8 }',
+      'A: 0, B: 1, C: 2',
+    );
+    const changes = diff(before, after);
+    expect(changes.map((c) => `${c.severity} ${c.rule} ${c.path}`)).toEqual([
+      'compatible enum-value-added Kind.C',
+      'compatible field-added A.x',
+    ]);
+    expect(changes[1]!.message).toBe(
+      "packet 'A' field 'x': added (u16) only when 'k' is C, which old versions do not define",
+    );
+    // B is already defined, so old versions send it and the bytes would shift.
+    expect(
+      brief(
+        before,
+        fields(
+          '{ name: x, type: u16, if: { field: k, in: [B, C] } }, { name: y, type: u8 }',
+          'A: 0, B: 1, C: 2',
+        ),
+      ),
+    ).toEqual(['compatible enum-value-added Kind.C', 'breaking field-added A.x']);
+  });
+
+  it('sees a condition inside a struct through the packets that use it', () => {
+    const struct = (field: string) =>
+      proto(
+        `structs:\n  S:\n    fields: [{ name: on, type: bool }, ${field}]\n` +
+          packets(packet('{ name: s, type: S }')),
+      );
+    const changes = diff(struct('{ name: x, type: u8 }'), struct('{ name: x, type: u8, if: on }'));
+    expect(changes.map((c) => `${c.severity} ${c.rule} ${c.path}`)).toEqual([
+      'breaking condition-added S.x',
+    ]);
+    expect(changes[0]!.usedBy).toEqual(['A']);
+  });
+});
+
 describe('diff locations', () => {
   it('takes line numbers from the new file, and the old file where it exists', () => {
     const before =

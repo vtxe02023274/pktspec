@@ -11,7 +11,7 @@ import { defaultCSharpNamespace, generateCSharp } from '../src/gen/csharp.js';
 import { defaultJavaPackage, generateJava } from '../src/gen/java.js';
 import { generateTypeScript } from '../src/gen/typescript.js';
 import type { Protocol } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 // Every generated decoder is fed the whole corpus: valid samples must decode and encode back to
 // the same bytes, invalid ones must raise the error class named in the manifest.
@@ -91,6 +91,7 @@ const protocols: [string, () => Protocol][] = [
   ['chat-room', chatRoom],
   ['all-types', allTypes],
   ['bit-fields', bitFields],
+  ['conditional-fields', conditionalFields],
 ];
 
 describe('fuzz corpus', () => {

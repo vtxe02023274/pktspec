@@ -4,8 +4,10 @@ import {
   bitLayout,
   findEnum,
   findStruct,
+  memberFields,
   type BitField,
   type BitsType,
+  type Condition,
   type Enum,
   type Field,
   type FieldType,
@@ -493,6 +495,7 @@ class Differ {
     }
     for (const { old, new: now } of [...pairs, ...renames]) {
       this.fieldChange(a.fields[old]!, b.fields[now]!, emit);
+      this.conditionChange(a.fields, a.fields[old]!, b.fields, b.fields[now]!, emit);
     }
     a.fields.forEach((f, i) => {
       if (!usedOld.has(i))
@@ -505,22 +508,33 @@ class Differ {
         );
     });
     b.fields.forEach((f, i) => {
-      if (!usedNew.has(i))
+      if (usedNew.has(i)) return;
+      if (this.onlyNewValues(a.fields, b.fields, f)) {
         emit(
-          'breaking',
+          'compatible',
           'field-added',
           f.name,
-          `added (${this.text(f.type)}); wire layout changes`,
+          `added (${this.text(f.type)}) only when ${this.conditionText(b.fields, f.condition!, 'new')}, which old versions do not define`,
           undefined,
           f.name,
         );
+        return;
+      }
+      emit(
+        'breaking',
+        'field-added',
+        f.name,
+        `added (${this.text(f.type)}); wire layout changes`,
+        undefined,
+        f.name,
+      );
     });
 
     const ordered = [...pairs, ...renames].sort((x, y) => x.old - y.old);
     const outOfOrder = ordered.find((pair, i) => i > 0 && pair.new < ordered[i - 1]!.new);
     if (outOfOrder) {
       const layout = (fields: Field[], side: 'old' | 'new') =>
-        fields.map((f) => this.sig(f.type, side)).join(';');
+        fields.map((f) => this.sig(f.type, side) + this.conditionSig(fields, f)).join(';');
       const same = layout(a.fields, 'old') === layout(b.fields, 'new');
       const order = (fields: Field[]) => fields.map((f) => f.name).join(', ');
       const field = b.fields[outOfOrder.new]!;
@@ -571,6 +585,120 @@ class Differ {
       }
     }
     if (f.doc !== g.doc) emit('info', 'doc-changed', g.name, 'doc changed', f.name, g.name);
+  }
+
+  /**
+   * A condition decides whether the bytes are there at all, so adding, removing or changing one
+   * makes the two sides disagree on where the following fields start.
+   */
+  private conditionChange(
+    oldFields: Field[],
+    f: Field,
+    newFields: Field[],
+    g: Field,
+    emit: (
+      s: Severity,
+      rule: string,
+      path: string,
+      message: string,
+      oldField?: string,
+      newField?: string,
+    ) => void,
+  ): void {
+    const was = f.condition && this.conditionText(oldFields, f.condition, 'old');
+    const now = g.condition && this.conditionText(newFields, g.condition, 'new');
+    if (!f.condition && g.condition) {
+      emit(
+        'breaking',
+        'condition-added',
+        g.name,
+        `now only present when ${now}; old versions always read it`,
+        f.name,
+        g.name,
+      );
+    } else if (f.condition && !g.condition) {
+      emit(
+        'breaking',
+        'condition-removed',
+        g.name,
+        `now always present; old versions only read it when ${was}`,
+        f.name,
+        g.name,
+      );
+    } else if (
+      f.condition &&
+      g.condition &&
+      !this.sameCondition(oldFields, f.condition, newFields, g.condition)
+    ) {
+      emit(
+        'breaking',
+        'condition-changed',
+        g.name,
+        `condition changed from ${was} to ${now}`,
+        f.name,
+        g.name,
+      );
+    }
+  }
+
+  /** Same target, by name or by position for a renamed one, and the same values on the wire. */
+  private sameCondition(
+    oldFields: Field[],
+    a: Condition,
+    newFields: Field[],
+    b: Condition,
+  ): boolean {
+    if (a.kind !== b.kind) return false;
+    const position = (fields: Field[], c: Condition) =>
+      memberFields(fields).findIndex((m) => m.name === c.field);
+    if (a.field !== b.field && position(oldFields, a) !== position(newFields, b)) return false;
+    if (a.kind === 'true' || b.kind === 'true') return true;
+    const values = (c: Extract<Condition, { kind: 'in' }>) =>
+      [...c.values].sort((x, y) => x - y).join(',');
+    return values(a) === values(b);
+  }
+
+  /**
+   * A new field that is only present for enum values the old version does not define never
+   * appears in data that old versions read or write, just like the new values themselves.
+   */
+  private onlyNewValues(oldFields: Field[], newFields: Field[], field: Field): boolean {
+    const { condition } = field;
+    if (condition?.kind !== 'in') return false;
+    const target = memberFields(newFields).find((m) => m.name === condition.field);
+    const before = memberFields(oldFields).find((m) => m.name === condition.field);
+    if (target?.type.kind !== 'enum' || before?.type.kind !== 'enum') return false;
+    const name = target.type.name;
+    if (before.type.name !== name) return false;
+    const old = this.before.protocol.enums.find((e) => e.name === name);
+    return (
+      old !== undefined && condition.values.every((v) => !old.values.some((o) => o.value === v))
+    );
+  }
+
+  private conditionText(fields: Field[], condition: Condition, side: 'old' | 'new'): string {
+    const name = `'${condition.field}'`;
+    if (condition.kind === 'true') return `${name} is true`;
+    const protocol = side === 'old' ? this.before.protocol : this.after.protocol;
+    const target = memberFields(fields).find((m) => m.name === condition.field);
+    const values = condition.values.map((value) =>
+      target?.type.kind === 'enum'
+        ? (findEnum(protocol, target.type.name).values.find((v) => v.value === value)?.name ??
+          String(value))
+        : String(value),
+    );
+    return values.length === 1
+      ? `${name} is ${values[0]}`
+      : `${name} is one of ${values.join(', ')}`;
+  }
+
+  /** The condition by the position of the member it tests, since names do not reach the wire. */
+  private conditionSig(fields: Field[], field: Field): string {
+    const { condition } = field;
+    if (!condition) return '';
+    const position = memberFields(fields).findIndex((m) => m.name === condition.field);
+    if (condition.kind === 'true') return `?${position}`;
+    return `?${position}=${[...condition.values].sort((x, y) => x - y).join(',')}`;
   }
 
   /**
@@ -747,7 +875,10 @@ class Differ {
       case 'struct': {
         if (stack.includes(type.name)) return `@${stack.length - stack.indexOf(type.name)}`;
         const inner = findStruct(protocol, type.name).fields;
-        return `{${inner.map((f) => this.sig(f.type, side, [...stack, type.name])).join(',')}}`;
+        const parts = inner.map(
+          (f) => this.sig(f.type, side, [...stack, type.name]) + this.conditionSig(inner, f),
+        );
+        return `{${parts.join(',')}}`;
       }
       case 'array':
         return `[${this.sig(type.element, side, stack)}]:${type.length}`;

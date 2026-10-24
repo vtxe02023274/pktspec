@@ -61,11 +61,27 @@
 - `fuzz`：有效樣本逐一把子欄位換成最大值（`bool` 為 true、列舉每個值），0 由 `zero` 樣本涵蓋；未使用的位元一律為 0（解碼會忽略、重新編碼寫 0，非 0 的樣本既不是有效也不會丟錯，所以不產生）。無效樣本 `unknown_enum` 多了列舉子欄位：在位元數放得下的範圍內取沒有成員使用的最大與最小值，放不下任何未使用值時不產生。
 - 測試：`test/fixtures/bit-fields.yaml`（三種寬度、沒有 0 值且底層為 `i16` 的列舉、佔滿 32 位元、第 31 位元、結構裡的位元欄位與結構陣列）；`compile.test.ts` 的錯誤訊息；各產生器 golden；Java、C#、TypeScript、C++ 往返（已知位元組、超出位元數的範圍錯誤、未知列舉值、未使用位元被忽略）；Wireshark 用 tshark 比對遮罩欄位、列舉專家資訊與截斷；fuzz 單元測試與四種解碼器的語料交叉驗證；`diff.test.ts` 每條規則。另外手動用 g++ `-std=c++20 -Wshadow -Wconversion -Wsign-conversion` 與 MSVC `/W4 /WX` 編譯過產生的標頭。
 
+- 條件欄位：欄位加 `if`。`if: flag` 測 `bool` 為 true；`if: { field: kind, equals: A }`、`if: { field: kind, in: [A, B] }` 測整數或列舉。沿用欄位上的一個鍵，不另開區塊：條件屬於單一欄位，和 `length`、`size` 一樣寫在欄位上最好讀；`bool` 的簡寫是最常見的「有旗標才有資料」。模型是 `Field.condition`（`{ kind: 'true' }` 或 `{ kind: 'in', values }`），列舉值在 `check` 時就換成數字，產生器與 `diff` 只看線上的值。`MemberField` 也帶 `condition`：位元欄位群組的條件由 `bitMember(bit, condition)` 帶給每個子欄位（另一個快取，物件一樣固定，C#、TypeScript、C++ 用它當名稱表的鍵）；`conditionTarget()` 找被測的成員。
+- `check`：被測欄位要在前面（後面的、自己、不存在的各有訊息，不存在的附大小寫建議）；型別只能是 `bool`、整數、列舉或位元欄位的子欄位，群組名稱本身不行；`bool` 只能用簡寫，整數與列舉一定要給值；列舉值要是成員名稱，整數要在型別範圍內，位元欄位在位元數內；`u64`、`i64` 限 ±(2^53 - 1)，因為值存成 JavaScript 的 number，Wireshark 端也用 `tonumber()` 比對，這個範圍內都精確。被測欄位本身沒編譯過時不再多報一個錯。
+- 被測欄位本身是條件欄位：支援，它不存在時條件一律不成立。理由是「有公會 → 公會有徽章 → 徽章資料」這種一層層的選填資料很常見；各語言比較空值都很便宜：Java 的列舉 `==` 本來就安全，`Boolean.TRUE.equals(x)`、`x != null && x == 3`；C# 的 nullable 比較會提升；TypeScript 的 `===` 對 `undefined` 為 false；C++ 的 `std::optional == 值` 在空的時候為 false。
+- 產生的程式碼：Java 用包裝型別而不是 `Optional`（`Optional` 不建議當欄位、不能序列化，產生的類別又是公開欄位，用包裝型別讀寫方式和其他欄位一樣），C# 是 `T?`，TypeScript 是 `T | undefined`，C++ 是 `std::optional<T>`；預設都是空值，不給一般欄位的預設值。
+- 寫入：每個條件欄位先算出 `<名稱>Present`，每個成員過一次 `checkPresent`（位元欄位群組逐一檢查子欄位），再寫入。錯誤沿用各語言既有的寫入錯誤：Java `IllegalArgumentException`、C# `ArgumentException`、TypeScript `RangeError`、C++ `PacketRangeError`，沒有新增錯誤類別。`checkPresent` 只在協定有條件欄位時產生，C# 與 TypeScript 另加 `OptionalEqual`／`optionalEqual` 給位元組、陣列、結構的相等比較，C++ 加 `detail::same` 的 `std::optional` 版本，所以沒有條件欄位的協定 golden 不變。
+- `bodySize` 依欄位有沒有值計算，而不是依條件：條件成立卻沒值時，大小計算不會先碰到空值，錯誤統一由寫入報；前面的欄位都一致，所以報錯前不會寫超出緩衝區。位元欄位群組以第一個子欄位判斷。寫入時取值：C# 值型別用 `GetValueOrDefault()`、參考型別加 `!`，TypeScript 加 `!`，C++ 用 `*`，都在 `checkPresent` 之後。C++ 讀取條件陣列先 `emplace()` 再就地填。
+- 結構可以經由條件陣列遞迴（`Node` 的 `children` 是 `std::optional<std::vector<Node>>`），g++、MSVC 都能編。
+- Wireshark：被測的欄位在欄位表多 `key`（有號數加 `signed`），位元欄位群組有被測的子欄位時加 `keys` 並在子欄位上記 `key`、`div`、`mod`；條件欄位有 `cond = { f, v }`。執行期的 `dissect_fields` 在協定有條件欄位時換成會記值的版本，每個結構或封包一張值表；64 位元的值用 `Int64:tonumber()`，比對範圍見上。
+- 文件：有條件欄位的表格多一欄 `Present when`，整份文件開頭多一句說明；大小欄寫條件成立時的大小，封包總大小因此變成 `N+`。
+- `diff`：加上（`condition-added`）、移除（`condition-removed`）、改變（`condition-changed`）條件都是 breaking，因為雙方對這幾個位元組在不在線上的判斷不同。比對時被測欄位依名稱或位置對應、值依集合比較，所以被測欄位改名、列舉成員改名、`in` 換順序都不算改變。結構的線上簽章也帶條件（被測成員的位置加值），改條件的結構會影響改名與排列判斷。新增條件欄位一般是 breaking（條件成立時後面的位元組位移）；例外是條件只比對舊版沒有定義的列舉值，而且被測欄位在舊版已是同一個列舉：舊版不會送出這些值、舊資料也不會讓條件成立，和新增列舉值同一個理由算 compatible。移除條件欄位一律 breaking，舊版在條件成立時還會讀那幾個位元組。
+- `fuzz`：欄位串列改成依條件組合（`place()`），被測的值從已編好的位元組讀回，不需要另外帶值；整包樣本、巢狀結構、隨機樣本都照條件決定欄位在不在，條件不成立的欄位不消耗亂數。逐一換邊界值時，條件欄位先把被測欄位設成符合的第一個值（被測欄位也有條件就一路往前設），所以條件欄位的每個邊界值、列舉的未知值、長度前綴都涵蓋得到；另外加 `present`（條件成立、欄位為 0）與 `absent`（被測欄位換成不符合的值）兩個樣本，和既有樣本位元組相同的照常去重。無效樣本多一種 `truncated`：封包層的條件欄位在條件成立時，從該欄位開始整個截掉（`missing-<欄位>`）。沒有條件欄位的協定，語料與之前逐位元組相同（用舊版 `fuzz.ts` 比對過三個既有 fixture 與兩組選項）。
+- 測試：`test/fixtures/conditional-fields.yaml`（列舉的 `equals`／`in`、`bool`、位元欄位的 `bool`、無號與列舉子欄位、有條件的位元欄位群組、測條件欄位的條件、負數與 `u64` 的值、條件陣列、固定長度陣列、經由條件陣列遞迴的結構）；`compile.test.ts` 的解析結果與錯誤訊息；各產生器 golden（既有的 golden 沒有變動）；Java、C#、TypeScript、C++ 往返（極端值的兩種排列、已知位元組、條件成立卻沒值、條件不成立卻有值、位元欄位群組只給一半、解碼後保持空值）；Wireshark 用 tshark 比對欄位有無、串連的條件、64 位元條件的邊界值與多餘位元組；fuzz 單元測試與四種解碼器的語料交叉驗證；`diff.test.ts` 每條規則。另外手動用 g++ `-std=c++20 -Wshadow -Wconversion -Wsign-conversion` 與 MSVC `/W4 /WX` 編譯過產生的標頭。
+
 ## 刻意的限制
 
 - 不支援 `bytes` 的陣列（各語言的相等比較會變複雜），請包成結構。
 - 位元欄位不能當陣列元素（每個元素要攤平成多個成員，各語言都得另造一個型別），請包成結構再用結構陣列。底層只有 `u8`／`u16`／`u32`，子欄位只有無號整數、`bool`、非負值的列舉，沒有有號子欄位。
 - 位元欄位未使用的位元解碼時不檢查，重新編碼一律寫 0，所以收到非 0 的保留位元時重新編碼結果會不同。
+- 條件只能測同一層、前面的欄位，不能測巢狀結構裡的欄位，也不能有 `and`／`or`、比大小或 `bool` 為 false；陣列元素不能各自帶條件。`bool` 為 false 的情況可以把旗標反過來定義。
+- 條件的整數值限 ±(2^53 - 1)，`u64`、`i64` 再大的值不能當條件。
+- `fuzz` 的 `missing` 樣本只做封包層的條件欄位；巢狀結構裡的條件欄位靠整包截斷與邊界值涵蓋。
 - 字串陣列的元素一律用 u16 長度前綴。
 - 結構只能透過長度前綴陣列遞迴。
 - TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
@@ -76,4 +92,4 @@
 
 ## 下一步
 
-照 README 路線圖，位元欄位已完成，下一版做條件欄位。條件欄位進來後 fuzz 也要補：要涵蓋條件成立與不成立的兩種排列；`diff` 要補規則（目前格式沒有選填欄位）。條件若要能看位元欄位的子欄位，`memberFields()` 已經把子欄位攤平成一般成員，可以直接引用。
+README 路線圖已全部完成。之後若要擴充條件，可以從 `Condition` 加新的 `kind`（例如 `bool` 為 false、不等於），compile、各產生器的 `condition()`、Wireshark 的 `holds()`、fuzz 的 `holds()`／`satisfy()`／`fail()` 與 `diff` 的 `sameCondition()` 要一起改。

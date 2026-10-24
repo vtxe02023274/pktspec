@@ -9,13 +9,14 @@ import { generateTypeScript } from '../src/gen/typescript.js';
 import {
   INT_RANGES,
   bitMember,
+  fieldMembers,
   findEnum,
   findStruct,
   type Field,
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
 
 type Variant = 'max' | 'min';
 
@@ -35,7 +36,9 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
 
 /** Constructor arguments for the fields; a bit field group gives one per bit field. */
 function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  const present = presentFields(protocol, fields, variant);
   return fields.flatMap((field) => {
+    if (!present.has(field)) return fieldMembers(field).map(() => 'undefined');
     if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
     return field.type.fields.map((bit) =>
       bit.type.kind === 'uint'
@@ -158,6 +161,17 @@ function errorChecks(protocol: Protocol): string[] {
       `throws(InvalidPacketError, () => ${decode('1, 0, 0, 0, 0, 0, 0, 0')}, 'mood 0');`,
       `throws(InvalidPacketError, () => ${decode('1, 0, 6, 4, 0, 0, 0, 0')}, 'team 3');`,
       `expect(new Status().equals(${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}), 'unused bits');`,
+    );
+  }
+  if (protocol.name === 'conditional_fields') {
+    const polygon = 'Shape.Polygon, undefined, new Point(), []';
+    checks.push(
+      'check(new Draw(Shape.Circle, 1.5), true);',
+      "throws(RangeError, () => new Draw(Shape.Circle).encode(), 'missing radius');",
+      "throws(RangeError, () => new Draw(Shape.Point, 1.5).encode(), 'radius without Circle');",
+      `throws(RangeError, () => new Draw(${polygon}, true, 7, false).encode(), 'half a bit field group');`,
+      `throws(RangeError, () => new Draw(${polygon}, false, undefined, undefined, 1).encode(), 'bit field group when closed is false');`,
+      "expect(new Draw().equals(ConditionalFieldsProtocol.decodeFromClient(new Uint8Array([1, 0, 9]))), 'absent fields stay undefined');",
     );
   }
   return checks.map((check) => `  ${check}`);
@@ -311,6 +325,13 @@ describe('TypeScript round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 120_000);
+
+  it('writes conditional fields only when their condition holds', () => {
+    const lines = runRoundTrip(conditionalFields());
+    // Big-endian: opcode, Shape.Circle, then the f32 radius 1.5 and nothing else.
+    expect(lines).toContain('Draw 01013fc00000');
+    expect(lines).toContain('Draw 0100');
   }, 120_000);
 
   it('encodes and decodes every type in big-endian order', () => {

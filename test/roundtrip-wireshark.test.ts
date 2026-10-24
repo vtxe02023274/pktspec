@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { generateWireshark } from '../src/gen/wireshark.js';
 import type { Protocol } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 function findTshark(): string | undefined {
   const candidates = ['tshark'];
@@ -613,5 +613,128 @@ describe.skipIf(!tshark)('Wireshark dissector in tshark', () => {
     expect(tree).toContain('= team: GREEN (2)');
     expect(tree).toContain('= mood: ANGRY (3)');
     expect(tree).toContain('= level: 127');
+  });
+
+  it('adds a conditional field only when its condition holds', () => {
+    const wire = () => new Wire(false);
+    const point = (w: Wire, x: number, y: number) => w.int(2, x).int(2, y);
+    const files = capture(conditionalFields(), SERVER, [
+      toServer(wire().int(1, 1).int(1, 1).float(4, 1.5).build()),
+      // A closed polygon: corner, one point, fill, the style bits (dashed, width 15), dash, label.
+      toServer(
+        point(point(wire().int(1, 1).int(1, 3), 1, 2).int(1, 1), 3, 4)
+          .int(1, 1)
+          .int(4, 7)
+          .int(1, 0x1f)
+          .raw([5, 6])
+          .text(1, 'hi')
+          .build(),
+      ),
+      // An open polygon stops after closed; the byte after a point is not a radius.
+      toServer(point(wire().int(1, 1).int(1, 3), 1, 2).int(1, 0).int(1, 0).build()),
+      toServer(wire().int(1, 1).int(1, 0).int(1, 9).build()),
+      // Level -128, in a guild, tier 7, kind POLYGON, then guild, title, sides, avatar and tree.
+      toClient(
+        wire()
+          .int(1, 2)
+          .int(8, 0)
+          .int(1, -128)
+          .int(8, -5)
+          .int(2, 0x3f)
+          .int(4, 9)
+          .int(1, 1)
+          .raw([1, 2, 3, 4])
+          .text(2, 't')
+          .int(1, 5)
+          .text(1, 'a')
+          .int(1, 1)
+          .int(1, 1)
+          .int(1, 1)
+          .int(1, 2)
+          .int(1, 0)
+          .build(),
+      ),
+      // The largest id a condition can hold still matches; 2^53 + 1 does not, so its byte is left.
+      toClient(
+        wire()
+          .int(1, 2)
+          .int(8, 2n ** 53n - 1n)
+          .int(1, 0)
+          .int(2, 0)
+          .text(1, 'b')
+          .build(),
+      ),
+      toClient(
+        wire()
+          .int(1, 2)
+          .int(8, 2n ** 53n + 1n)
+          .int(1, 0)
+          .int(2, 0)
+          .int(1, 0)
+          .build(),
+      ),
+    ]);
+    const names = [
+      'draw.radius',
+      'draw.corner',
+      'draw.fill',
+      'draw.dashed',
+      'draw.width',
+      'draw.dash.item',
+      'draw.label',
+      'profile.bonus',
+      'profile.guild',
+      'guild.emblem',
+      'profile.title',
+      'profile.sides',
+      'profile.avatar',
+      'node.value',
+    ];
+    const rows = fieldRows(
+      files,
+      names.map((n) => `conditional_fields.${n}`),
+    );
+    const pick = (row: Row) =>
+      Object.fromEntries(
+        names.flatMap((n) => {
+          const value = row[`conditional_fields.${n}`];
+          return value ? [[n, value]] : [];
+        }),
+      );
+    expect(rows.map((r) => r['_ws.col.info'])).toEqual([
+      'Draw',
+      'Draw',
+      'Draw',
+      'Draw',
+      'Profile',
+      'Profile',
+      'Profile',
+    ]);
+    expect(pick(rows[0]!)).toEqual({ 'draw.radius': '1.5' });
+    const closed = pick(rows[1]!);
+    expect(closed['draw.radius']).toBeUndefined();
+    expect(closed['draw.fill']).toBe('7');
+    expect(closed['draw.dashed']).toMatch(/^(1|true)$/i);
+    expect(closed['draw.width']).toBe('15');
+    expect(closed['draw.dash.item']).toBe('5|6');
+    expect(closed['draw.label']).toBe('hi');
+    expect(rows[1]!['_ws.expert.message']).toBe('');
+    expect(Object.keys(pick(rows[2]!))).toEqual(['draw.corner']);
+    expect(rows[2]!['_ws.expert.message']).toBe('');
+    expect(pick(rows[3]!)).toEqual({});
+    expect(rows[3]!['_ws.expert.message']).toBe('1 bytes follow the packet');
+
+    const profile = pick(rows[4]!);
+    expect(profile['profile.bonus']).toBe('-5');
+    expect(profile['guild.emblem']).toBe('01020304');
+    expect(profile['profile.title']).toBe('t');
+    expect(profile['profile.sides']).toBe('5');
+    expect(profile['profile.avatar']).toBe('61');
+    expect(profile['node.value']).toBe('1|2');
+    expect(rows[4]!['_ws.expert.message']).toBe('');
+    expect(pick(rows[5]!)).toEqual({ 'profile.avatar': '62' });
+    expect(rows[5]!['_ws.expert.message']).toBe('');
+    expect(pick(rows[6]!)).toEqual({});
+    expect(rows[6]!['_ws.expert.message']).toBe('1 bytes follow the packet');
   });
 });

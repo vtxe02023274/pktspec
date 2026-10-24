@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { defaultJavaPackage, generateJava, isValidJavaPackage } from '../src/gen/java.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 describe('generateJava', () => {
   for (const [name, load] of [
     ['chat-room', chatRoom],
     ['all-types', allTypes],
     ['bit-fields', bitFields],
+    ['conditional-fields', conditionalFields],
   ] as const) {
     it(`matches the golden files for ${name}`, async () => {
       const files = generateJava(load());

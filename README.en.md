@@ -98,20 +98,21 @@ packets:
 
 ### Types
 
-| Type             | Syntax                         | Size (bytes)          | Java type                   | C# type                                 | TypeScript type                                         | C++ type                                                       |
-| ---------------- | ------------------------------ | --------------------- | --------------------------- | --------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
-| Unsigned integer | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8         | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`          | `number` `number` `number` `bigint`                     | `std::uint8_t` `std::uint16_t` `std::uint32_t` `std::uint64_t` |
-| Signed integer   | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8         | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`            | `number` `number` `number` `bigint`                     | `std::int8_t` `std::int16_t` `std::int32_t` `std::int64_t`     |
-| Float            | `f32` `f64`                    | 4 / 8                 | `float` `double`            | `float` `double`                        | `number`                                                | `float` `double`                                               |
-| Boolean          | `bool`                         | 1                     | `boolean`                   | `bool`                                  | `boolean`                                               | `bool`                                                         |
-| String           | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes  | `String`                    | `string`                                | `string`                                                | `std::string`                                                  |
-| Bytes            | `bytes`, `length: u8/u16/u32`  | prefix + n            | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::vector<std::uint8_t>`                                    |
-| Fixed bytes      | `bytes`, `size: 16`            | 16                    | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::array<std::uint8_t, N>`                                  |
-| Prefixed array   | `T[]`, `length: u8/u16/u32`    | prefix + elements     | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::vector<T>`                                               |
-| Fixed array      | `T[4]`                         | 4 elements            | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::array<T, N>`                                             |
-| Struct           | a name from `structs`          | sum of its fields     | generated class             | generated class                         | generated class                                         | generated `struct`                                             |
-| Enum             | a name from `enums`            | its base integer type | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase | generated `enum class`, members in PascalCase                  |
-| Bit fields       | `u8` `u16` `u32` with `bits`   | 1 / 2 / 4             | one member per bit field    | one member per bit field                | one member per bit field                                | one member per bit field                                       |
+| Type              | Syntax                         | Size (bytes)               | Java type                   | C# type                                 | TypeScript type                                         | C++ type                                                       |
+| ----------------- | ------------------------------ | -------------------------- | --------------------------- | --------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
+| Unsigned integer  | `u8` `u16` `u32` `u64`         | 1 / 2 / 4 / 8              | `short` `int` `long` `long` | `byte` `ushort` `uint` `ulong`          | `number` `number` `number` `bigint`                     | `std::uint8_t` `std::uint16_t` `std::uint32_t` `std::uint64_t` |
+| Signed integer    | `i8` `i16` `i32` `i64`         | 1 / 2 / 4 / 8              | `byte` `short` `int` `long` | `sbyte` `short` `int` `long`            | `number` `number` `number` `bigint`                     | `std::int8_t` `std::int16_t` `std::int32_t` `std::int64_t`     |
+| Float             | `f32` `f64`                    | 4 / 8                      | `float` `double`            | `float` `double`                        | `number`                                                | `float` `double`                                               |
+| Boolean           | `bool`                         | 1                          | `boolean`                   | `bool`                                  | `boolean`                                               | `bool`                                                         |
+| String            | `string`, `length: u8/u16/u32` | prefix + UTF-8 bytes       | `String`                    | `string`                                | `string`                                                | `std::string`                                                  |
+| Bytes             | `bytes`, `length: u8/u16/u32`  | prefix + n                 | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::vector<std::uint8_t>`                                    |
+| Fixed bytes       | `bytes`, `size: 16`            | 16                         | `byte[]`                    | `byte[]`                                | `Uint8Array`                                            | `std::array<std::uint8_t, N>`                                  |
+| Prefixed array    | `T[]`, `length: u8/u16/u32`    | prefix + elements          | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::vector<T>`                                               |
+| Fixed array       | `T[4]`                         | 4 elements                 | `List<T>`                   | `List<T>`                               | `T[]`                                                   | `std::array<T, N>`                                             |
+| Struct            | a name from `structs`          | sum of its fields          | generated class             | generated class                         | generated class                                         | generated `struct`                                             |
+| Enum              | a name from `enums`            | its base integer type      | generated `enum`            | generated `enum`, members in PascalCase | `const` object plus a union type, members in PascalCase | generated `enum class`, members in PascalCase                  |
+| Bit fields        | `u8` `u16` `u32` with `bits`   | 1 / 2 / 4                  | one member per bit field    | one member per bit field                | one member per bit field                                | one member per bit field                                       |
+| Conditional field | any type with `if`             | 0 when the condition fails | boxed type (nullable)       | `T?`                                    | `T \| undefined`                                        | `std::optional<T>`                                             |
 
 - `length` defaults to `u16`. It counts bytes for strings and bytes, and elements for arrays.
 - Java has no unsigned integers, so unsigned types use the next larger type. `u64` uses `long`; values above 2^63 appear negative and can be printed with `Long.toUnsignedString`.
@@ -141,6 +142,27 @@ fields:
 - In the generated code each bit field is an ordinary member, named by the language's usual rules; the group name (`state`) only shows up in the docs, in Wireshark and in `diff`. Bit fields share one namespace with the fields around them. An unsigned bit field gets the smallest unsigned type that holds it, for example 7 bits are a `short` in Java, a `byte` in C# and a `std::uint8_t` in C++.
 - Writing a value that does not fit its bits throws the usual range error: `IllegalArgumentException` in Java, `ArgumentException` in C#, `RangeError` in TypeScript and `PacketRangeError` in C++. Reading an enum value the enum does not define throws the same error as an ordinary enum field.
 - Bit fields cannot be array elements; wrap them in a struct and use an array of the struct.
+
+### Conditional fields
+
+A field with `if` is only on the wire when an earlier field of the same struct or packet matches:
+
+```yaml
+fields:
+  - { name: shape, type: Shape }
+  - { name: radius, type: f32, if: { field: shape, equals: CIRCLE } } # only for CIRCLE
+  - { name: corner, type: Point, if: { field: shape, in: [RECT, POLYGON] } } # for either value
+  - { name: has_guild, type: bool }
+  - { name: guild, type: Guild, if: has_guild } # only when the bool is true
+```
+
+- A condition can only test an earlier field. A `bool` (a `bool` bit field too) is written `if: field_name` and means true; an integer or enum (unsigned and enum bit fields too) takes one value with `equals` or a list with `in`. Enum values are member names; integers must fit the type, a bit field its bits, and `u64` and `i64` are limited to ±(2^53 - 1).
+- When the condition fails, the field is not on the wire at all and takes no bytes. A group of bit fields can have a condition too; the whole group comes and goes together.
+- The tested field may be conditional itself: while it is absent, every condition on it fails, so conditions can be chained.
+- `check` rejects a condition on the field itself, on a later field, on the name of a bit field group, or on a string, float, struct or array; also an unknown enum member, an integer out of range and a value listed twice in `in`. Array elements cannot have conditions of their own.
+- In the generated code a conditional field is optional: a nullable boxed type in Java (`Float`, `Long`; reference types stay as they are), a nullable type in C# (`float?`, `string?`), `T | undefined` in TypeScript and `std::optional<T>` in C++, empty by default. Decoding leaves it empty when the condition fails.
+- Java uses boxed types rather than `Optional`: `Optional` is not meant for fields (it is discouraged there and not serializable), and the generated classes have public fields, so a boxed type is read and written like any other field.
+- Encoding a field whose condition holds but which has no value, or one that has a value while its condition fails, throws the usual write error: `IllegalArgumentException` in Java, `ArgumentException` in C#, `RangeError` in TypeScript and `PacketRangeError` in C++. `bodySize` counts what the fields hold.
 
 ## Generated code
 
@@ -321,8 +343,9 @@ Install it by copying the file to the personal plugins folder (Help > About Wire
 - Field names are `protocol.packet.field` in lowercase with underscores, for example `chat_room.say.room_id`; struct fields use `protocol.struct.field`, array elements add `.item`, and `protocol.packet`, `protocol.direction` and `protocol.opcode` are always there.
 - Expert info: truncated data, unknown opcode, unknown enum value, a length or count past the end of the packet, structs nested over 64 levels, data after the packet, and an unknown direction.
 - The integer of a bit field group is shown in hex, with one masked field per bit field under it; those are named like ordinary fields, `protocol.packet.field`. Unknown enum values in bit fields get expert info too.
+- A conditional field is only added to the tree when its condition holds; otherwise it is not there and cannot be filtered on.
 
-The docs generator produces field tables like this one (bit fields get another table with the bits of each field and the unused bits):
+The docs generator produces field tables like this one (bit fields get another table with the bits of each field and the unused bits; a table with conditional fields gets a `Present when` column with the conditions):
 
 | Field     | Type                       | Size (bytes) | Description |
 | --------- | -------------------------- | ------------ | ----------- |
@@ -353,16 +376,18 @@ info (2)
 
 The wire format is an opcode followed by the fields in order, with no names or tags, so the rules look at how the bytes are laid out:
 
-| Severity   | Changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| breaking   | Endianness or opcode width; a packet removed or its opcode or direction changed; a field added or removed (the bytes after it shift); a field's type, size, length prefix, fixed length or array element type; a reorder that changes the layout; an enum's underlying type, a value removed or renumbered; the integer under bit fields, a bit field's width, position (order included) or type, a bit field removed, or a new one that takes bits old versions use or is an enum without the value 0; the same changes inside a struct (with the packets that carry it) |
-| compatible | A new packet with a new opcode, a new enum value, a new struct or enum; a new bit field in high bits that were unused                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| info       | Protocol rename, `version` or `doc` changes; a field, packet, enum value or bit field renamed with the same position and type; a type renamed with the same layout; a reorder that leaves the layout unchanged                                                                                                                                                                                                                                                                                                                                                            |
+| Severity   | Changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| breaking   | Endianness or opcode width; a packet removed or its opcode or direction changed; a field added or removed (the bytes after it shift); a field's type, size, length prefix, fixed length or array element type; a reorder that changes the layout; an enum's underlying type, a value removed or renumbered; the integer under bit fields, a bit field's width, position (order included) or type, a bit field removed, or a new one that takes bits old versions use or is an enum without the value 0; a condition added, removed or changed, and a new conditional field (except as below); the same changes inside a struct (with the packets that carry it) |
+| compatible | A new packet with a new opcode, a new enum value, a new struct or enum; a new bit field in high bits that were unused; a new conditional field that only appears for enum values old versions do not define                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| info       | Protocol rename, `version` or `doc` changes; a field, packet, enum value or bit field renamed with the same position and type; a type renamed with the same layout; a reorder that leaves the layout unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 - A breaking change to a struct or enum that no packet uses is reported as info.
 - A new enum value counts as compatible, but the generated code throws on values it does not know, so an older peer that receives the new value still fails.
 - A new bit field in unused high bits is compatible: old versions write those bits as 0 and ignore them, and new versions read 0 from old data. Only an enum without the value 0 fails on old data, so that case is breaking. Removing a bit field is breaking: old versions still read those bits and only ever get 0.
 - When an enum is only used in bit fields, a change of its underlying type does not touch the wire and is reported as info.
+- Adding, removing or changing a condition is breaking: the two sides disagree on whether those bytes are there, so the fields after them are misread. Conditions are compared by the position of the tested field and by the values on the wire, so renaming the tested field or an enum member, or reordering `in`, is not a change.
+- A new conditional field is usually breaking, because the bytes after it shift whenever the condition holds. The exception is a condition that only matches enum values the old version does not define: old versions never send them and old data never meets the condition, so it is as compatible as adding the enum values.
 - Exit codes: 0 when nothing is breaking, 1 when anything is, 2 for usage errors. Like `check`, an unreadable file or one that fails validation exits 1 with the errors on stderr; errors from both files are listed together.
 
 ## Fuzz test data
@@ -445,15 +470,15 @@ Each entry of `samples` in `manifest.json` describes one file:
 
 Samples are grouped by `kind`, and the table is also the order in which they are written and kept by `--max-samples`:
 
-| `kind`             | `error`     | Content                                                                                                                                                                                      |
-| ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `boundary`         | none        | Whole packets with every field at zero (`zero`), at its lowest values (`min`) and at its highest values (`max`); then one field at a time set to a boundary value while the others stay zero |
-| `unknown_opcode`   | `invalid`   | In each direction the lowest and highest unused opcode, and opcodes that exist only in the other direction; opcode only, no body                                                             |
-| `unknown_enum`     | `invalid`   | Enum fields (also inside structs and arrays) set to the highest and the lowest value that no member uses; for enums in bit fields, within what the bits hold                                 |
-| `length_past_end`  | `truncated` | The length prefix of a string, `bytes` or array set to the number of remaining bytes plus one                                                                                                |
-| `length_too_large` | `invalid`   | A `u32` length prefix set to `0xFFFFFFFF`, above 2^31 - 1                                                                                                                                    |
-| `truncated`        | `truncated` | The `max` sample cut at every byte boundary (lengths 0 up to the full length minus one); above 1024 bytes only the first and last 512 lengths                                                |
-| `random`           | none        | `--count` random valid samples per packet                                                                                                                                                    |
+| `kind`             | `error`     | Content                                                                                                                                                                                                                                                              |
+| ------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `boundary`         | none        | Whole packets with every field at zero (`zero`), at its lowest values (`min`) and at its highest values (`max`); then one field at a time set to a boundary value while the others stay zero                                                                         |
+| `unknown_opcode`   | `invalid`   | In each direction the lowest and highest unused opcode, and opcodes that exist only in the other direction; opcode only, no body                                                                                                                                     |
+| `unknown_enum`     | `invalid`   | Enum fields (also inside structs and arrays) set to the highest and the lowest value that no member uses; for enums in bit fields, within what the bits hold                                                                                                         |
+| `length_past_end`  | `truncated` | The length prefix of a string, `bytes` or array set to the number of remaining bytes plus one                                                                                                                                                                        |
+| `length_too_large` | `invalid`   | A `u32` length prefix set to `0xFFFFFFFF`, above 2^31 - 1                                                                                                                                                                                                            |
+| `truncated`        | `truncated` | The `max` sample cut at every byte boundary (lengths 0 up to the full length minus one); above 1024 bytes only the first and last 512 lengths; for conditional fields, also a sample whose condition holds but which ends where the field starts (`missing-<field>`) |
+| `random`           | none        | `--count` random valid samples per packet                                                                                                                                                                                                                            |
 
 The boundary values for `boundary` are:
 
@@ -462,6 +487,7 @@ The boundary values for `boundary` are:
 - For strings and `bytes`: empty, short, multi-byte UTF-8 and the longest length the prefix allows; for fixed-size `bytes`: all `0xFF` and a fixed pattern.
 - Every enum value.
 - For bit fields: each field in turn at its maximum (true for `bool`, every value for an enum), with 0 covered by the all-zero sample; unused bits are always 0.
+- For conditional fields: before the boundary values, the tested field is set to the first value that meets the condition (and so on back when it is conditional itself); there are also samples with the condition met (`present`) and failed (`absent`). Whole-packet and random samples leave fields out as their conditions say.
 - For arrays: empty, one element, the longest count and element boundary values (names start with `elem-`); for fixed-size arrays: boundary values of the first element (`first-`); nested structs level by level, down to the third level for recursive ones.
 - When the longest length a prefix allows does not fit in `--max-size`, the value is filled up to the longest length that fits and the file name says `fill` instead of `max`.
 
@@ -485,7 +511,7 @@ Notes:
 - [x] `pktspec diff old.yaml new.yaml` to list changes and compatibility problems between versions
 - [x] `pktspec fuzz`: fuzz test data generated from the definition
 - [x] Bit fields: one integer split into several fields
-- [ ] Conditional fields (a value decides whether later fields are present)
+- [x] Conditional fields: a value decides whether later fields are read
 
 ## Development
 

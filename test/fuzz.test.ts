@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { INT_RANGES, findEnum, type Protocol } from '../src/model.js';
 import { Rng, generateFuzz, type FuzzCorpus, type FuzzSample } from '../src/fuzz.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 const hex = (data: Uint8Array) => Buffer.from(data).toString('hex');
 const find = (corpus: FuzzCorpus, file: string): FuzzSample => {
@@ -135,6 +135,27 @@ describe('generateFuzz', () => {
       'invalid/s2c-Board-enum-cells-elem-flags-owner-bad_3.bin',
     ]);
     expect(enums.every((s) => s.error === 'invalid')).toBe(true);
+  });
+
+  it('covers conditional fields with their condition met and not met', () => {
+    const corpus = generateFuzz(conditionalFields());
+    const draw = (name: string) => hex(find(corpus, `valid/c2s-Draw-${name}.bin`).data);
+    // Opcode, then Shape; POINT leaves every other field out, CIRCLE brings in the f32 radius.
+    expect(draw('zero')).toBe('01' + '00');
+    expect(draw('shape-CIRCLE')).toBe('01' + '01' + '00000000');
+    expect(draw('radius-one_and_half')).toBe('01' + '01' + '3fc00000');
+    // A closed polygon whose width is 1, so the label is left out.
+    expect(draw('label-absent')).toBe('01' + '03' + '00000000' + '00' + '01' + '00000000' + '02');
+    // The id is 0, which is one of the values the avatar needs.
+    expect(hex(find(corpus, 'valid/s2c-Profile-zero.bin').data)).toBe(
+      '02' + '0000000000000000' + '00' + '0000' + '00',
+    );
+    const missing = find(corpus, 'invalid/c2s-Draw-missing-radius.bin');
+    expect(hex(missing.data)).toBe('0101');
+    expect(missing).toMatchObject({ valid: false, error: 'truncated', kind: 'truncated' });
+    expect(hex(find(corpus, 'invalid/s2c-Profile-missing-guild.bin').data)).toBe(
+      '02' + '0000000000000000' + '00' + '0001',
+    );
   });
 
   it('nests structs and stops recursive ones', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateDocs } from '../src/gen/docs.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 describe('generateDocs', () => {
   it('matches the golden file for chat-room', async () => {
@@ -18,6 +18,14 @@ describe('generateDocs', () => {
     const [file] = generateDocs(bitFields());
     await expect(file!.content).toMatchFileSnapshot('golden/docs/bit_fields.md');
     expect(file!.content).toContain('| 12–15 | (unused) |  | Written as 0, ignored when read. |');
+  });
+
+  it('matches the golden file for conditional-fields, with a column for the conditions', async () => {
+    const [file] = generateDocs(conditionalFields());
+    await expect(file!.content).toMatchFileSnapshot('golden/docs/conditional_fields.md');
+    expect(file!.content).toContain(
+      '| `corner` | [Point](#point) | 4 | `shape` is one of `RECT`, `POLYGON` |  |',
+    );
   });
 
   it('escapes pipes in descriptions', () => {

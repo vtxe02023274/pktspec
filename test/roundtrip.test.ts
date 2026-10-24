@@ -7,13 +7,14 @@ import { defaultJavaPackage, generateJava } from '../src/gen/java.js';
 import { pascalCase } from '../src/gen/common.js';
 import {
   bitMember,
+  fieldMembers,
   findEnum,
   findStruct,
   type Field,
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
 
 const hasJava = spawnSync('javac', ['-version']).status === 0;
 if (!hasJava && process.env.PKTSPEC_REQUIRE_JAVA) {
@@ -38,7 +39,9 @@ const PRIMITIVE_SAMPLES: Record<string, Record<Variant, string>> = {
 
 /** Constructor arguments for the fields; a bit field group gives one per bit field. */
 function samples(protocol: Protocol, fields: Field[], variant: Variant, depth = 0): string[] {
+  const present = presentFields(protocol, fields, variant);
   return fields.flatMap((field) => {
+    if (!present.has(field)) return fieldMembers(field).map(() => 'null');
     if (field.type.kind !== 'bits') return [sample(protocol, field.type, variant, depth)];
     return field.type.fields.map((bit) => {
       if (bit.type.kind !== 'uint') return sample(protocol, bitMember(bit).type, variant, depth);
@@ -98,6 +101,7 @@ function driver(protocol: Protocol, javaPackage: string): string {
     }),
   );
   if (protocol.name === 'bit_fields') checks.push(...bitFieldChecks());
+  if (protocol.name === 'conditional_fields') checks.push(...conditionChecks());
   return `package ${javaPackage};
 
 import java.nio.ByteBuffer;
@@ -164,6 +168,20 @@ function bitFieldChecks(): string[] {
   ].map((check) => `        ${check}`);
 }
 
+/** A value exactly when the condition holds, both ways, for a field and a bit field group. */
+function conditionChecks(): string[] {
+  const draw = (shape: string, radius: string, closed = 'null', dashed = 'null', width = 'null') =>
+    `new Draw(Shape.${shape}, ${radius}, ${shape === 'POLYGON' ? 'new Point()' : 'null'}, ${shape === 'POLYGON' ? 'new java.util.ArrayList<>()' : 'null'}, ${closed}, ${closed === 'true' ? '7L' : 'null'}, ${dashed}, ${width}, null, null)`;
+  return [
+    `check(${draw('CIRCLE', '1.5f')}, true);`,
+    `throwsIllegal(() -> ${draw('CIRCLE', 'null')}.encode(), "missing radius");`,
+    `throwsIllegal(() -> ${draw('POINT', '1.5f')}.encode(), "radius without CIRCLE");`,
+    `throwsIllegal(() -> ${draw('POLYGON', 'null', 'true', 'false')}.encode(), "half a bit field group");`,
+    `throwsIllegal(() -> ${draw('POLYGON', 'null', 'false', 'false', '(short) 1')}.encode(), "bit field group when closed is false");`,
+    `expect(${draw('POINT', 'null')}.equals(ConditionalFieldsProtocol.decodeFromClient(new byte[] {1, 0, 9})), "absent fields stay null");`,
+  ].map((check) => `        ${check}`);
+}
+
 const workDirs: string[] = [];
 afterAll(() => workDirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
@@ -211,6 +229,14 @@ describe.skipIf(!hasJava)('Java round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 60_000);
+
+  it('writes conditional fields only when their condition holds', () => {
+    const lines = runRoundTrip(conditionalFields());
+    // Big-endian: opcode, Shape.CIRCLE, then the f32 radius 1.5 and nothing else.
+    expect(lines).toContain('Draw 01013fc00000');
+    // Shape.POINT leaves every other field out.
+    expect(lines).toContain('Draw 0100');
   }, 60_000);
 
   it('encodes and decodes every type in big-endian order', () => {

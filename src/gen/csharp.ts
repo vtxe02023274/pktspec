@@ -4,10 +4,14 @@ import {
   bitGroups,
   bitLayout,
   bitMember,
+  conditionTarget,
+  fieldMembers,
   findEnum,
+  hasConditions,
   memberFields,
   wireSize,
   type BitsType,
+  type Condition,
   type ElementType,
   type Enum,
   type EnumBaseType,
@@ -146,6 +150,8 @@ const WIRE_NAMES: Record<PrimitiveType, string> = {
   bool: 'Bool',
 };
 
+const LITERAL_SUFFIXES: Partial<Record<PrimitiveType, string>> = { u32: 'u', u64: 'UL', i64: 'L' };
+
 const INDENT = '    ';
 
 const CHECK_BITS = `    /// <exception cref="ArgumentException">The value does not fit in <paramref name="bits"/> bits.</exception>
@@ -156,6 +162,25 @@ const CHECK_BITS = `    /// <exception cref="ArgumentException">The value does n
             throw new ArgumentException($"{field} out of range for {bits} bits: {value}");
         }
         return (uint)value;
+    }`;
+
+const CONDITION_HELPERS = `    /// <exception cref="ArgumentException">The value is missing while its condition holds, or set while it does not.</exception>
+    internal static void CheckPresent(object? value, bool present, string field)
+    {
+        if (present && value is null)
+        {
+            throw new ArgumentException($"{field} is required by its condition");
+        }
+        if (!present && value is not null)
+        {
+            throw new ArgumentException($"{field} must be null because its condition is false");
+        }
+    }
+
+    internal static bool OptionalEqual<T>(T? a, T? b, Func<T, T, bool> equal)
+        where T : class
+    {
+        return a is null || b is null ? a == b : equal(a, b);
     }`;
 
 export function defaultCSharpNamespace(protocolName: string): string {
@@ -513,7 +538,9 @@ ${primitive('i64', 'Int64')}
       this.enumReader(e),
       ...(inBits.has(e.name) ? [this.bitEnumReader(e)] : []),
     ]);
-    const checkBits = bitGroups(this.protocol).length > 0 ? `\n\n${CHECK_BITS}` : '';
+    const checkBits =
+      (bitGroups(this.protocol).length > 0 ? `\n\n${CHECK_BITS}` : '') +
+      (hasConditions(this.protocol) ? `\n\n${CONDITION_HELPERS}` : '');
     return this.file(
       ['System', 'System.Collections.Generic', 'System.Globalization', 'System.IO', 'System.Text'],
       `/// <summary>Helpers shared by the generated classes.</summary>
@@ -756,8 +783,9 @@ ${members}
       members.push(
         exposed
           .map((field) => {
-            const initializer = this.defaultValue(field.type);
-            const declaration = `public ${this.csType(field.type)} ${this.member(field)} { get; set; }`;
+            // A conditional field stays null while its condition is false.
+            const initializer = field.condition ? undefined : this.defaultValue(field.type);
+            const declaration = `public ${this.memberType(field)} ${this.member(field)} { get; set; }`;
             return (
               xmlDoc(field.doc, INDENT) +
               `${INDENT}${declaration}${initializer ? ` = ${initializer};` : ''}`
@@ -803,7 +831,7 @@ ${members}
   private constructors(name: string, fields: MemberField[]): string {
     if (fields.length === 0) return `    public ${name}()\n    {\n    }`;
     const empty = `    public ${name}()\n    {\n    }`;
-    const parameters = fields.map((f) => `${this.csType(f.type)} ${this.parameter(f)}`);
+    const parameters = fields.map((f) => `${this.memberType(f)} ${this.parameter(f)}`);
     const assignments = fields.map((f) => `        this.${this.member(f)} = ${this.parameter(f)};`);
     const signature = `    public ${name}(${parameters.join(', ')})`;
     const wrapped =
@@ -823,31 +851,21 @@ ${members}
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const { type } = field;
-      const size = wireSize(type, this.protocol);
-      if (size.fixed) {
-        fixed += size.min;
+      const size = this.fieldSize(field);
+      if (!field.condition) {
+        fixed += size.fixed;
+        statements.push(...size.statements);
         continue;
       }
-      const value = `this.${this.member(field as MemberField)}`;
-      if (type.kind === 'array' || type.kind === 'fixedArray') {
-        const element = wireSize(type.element, this.protocol);
-        const prefix = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
-        fixed += prefix;
-        if (element.fixed) {
-          const count = `${value}.Count`;
-          statements.push(`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`);
-        } else {
-          statements.push(
-            `foreach (${this.csType(type.element)} item in ${value})`,
-            '{',
-            `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
-            '}',
-          );
-        }
-      } else {
-        statements.push(`size += ${this.variableSize(type, value)};`);
-      }
+      // Counted by what the field holds, so that WriteTo is the one to report a mismatch.
+      const presence = `this.${this.member(fieldMembers(field)[0]!)}`;
+      const inner = [...(size.fixed > 0 ? [`size += ${size.fixed};`] : []), ...size.statements];
+      statements.push(
+        `if (${presence} != null)`,
+        '{',
+        ...inner.map((line) => `${INDENT}${line}`),
+        '}',
+      );
     }
     const signature = isPacket ? 'public int BodySize()' : 'public int EncodedSize()';
     const doc = isPacket
@@ -858,6 +876,34 @@ ${members}
         ? `        return ${fixed};\n`
         : indentLines([`int size = ${fixed};`, ...statements, 'return size;']);
     return `${doc}    ${signature}\n    {\n${body}    }`;
+  }
+
+  private fieldSize(field: Field): { fixed: number; statements: string[] } {
+    const { type } = field;
+    const size = wireSize(type, this.protocol);
+    if (size.fixed) return { fixed: size.min, statements: [] };
+    const value = `this.${this.member(field as MemberField)}`;
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return { fixed: 0, statements: [`size += ${this.variableSize(type, value)};`] };
+    }
+    const element = wireSize(type.element, this.protocol);
+    const fixed = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
+    if (element.fixed) {
+      const count = `${value}.Count`;
+      return {
+        fixed,
+        statements: [`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`],
+      };
+    }
+    return {
+      fixed,
+      statements: [
+        `foreach (${this.csType(type.element)} item in ${value})`,
+        '{',
+        `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
+        '}',
+      ],
+    };
   }
 
   private variableSize(type: FieldType, value: string): string {
@@ -875,22 +921,19 @@ ${members}
 
   private writeMethod(fields: Field[], isPacket: boolean): string {
     const statements = fields.flatMap((field) => {
-      const { type } = field;
-      if (type.kind === 'bits') return this.writeBits(type, `${camelCase(field.name)}Bits`);
-      const name = this.member(field as MemberField);
-      const value = `this.${name}`;
-      if (type.kind !== 'array' && type.kind !== 'fixedArray') {
-        return [`${this.write(type, value, name)};`];
-      }
-      const header =
-        type.kind === 'array'
-          ? `writer.WriteLength(${value}.Count, ${PRIMITIVE_SIZES[type.length]});`
-          : `${this.codec}.CheckCount(${value}, ${type.size}, ${csharpString(name)});`;
+      const body = this.writeField(field);
+      if (!field.condition) return body;
+      const present = `${camelCase(field.name)}Present`;
+      const checks = fieldMembers(field).map((member) => {
+        const name = this.member(member);
+        return `${this.codec}.CheckPresent(this.${name}, ${present}, ${csharpString(name)});`;
+      });
       return [
-        header,
-        `foreach (${this.csType(type.element)} item in ${value})`,
+        `bool ${present} = ${this.condition(fields, field.condition, 'this')};`,
+        ...checks,
+        `if (${present})`,
         '{',
-        `${INDENT}${this.write(type.element, 'item', name)};`,
+        ...body.map((line) => `${INDENT}${line}`),
         '}',
       ];
     });
@@ -900,20 +943,51 @@ ${members}
     return `${doc}    public void WriteTo(PacketWriter writer)\n    {\n${indentLines(statements)}    }`;
   }
 
-  private writeBits(type: BitsType, local: string): string[] {
+  private writeField(field: Field): string[] {
+    const { type } = field;
+    if (type.kind === 'bits') return this.writeBits(field, type, `${camelCase(field.name)}Bits`);
+    const name = this.member(field as MemberField);
+    const value = this.value(field as MemberField);
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return [`${this.write(type, value, name)};`];
+    }
+    const header =
+      type.kind === 'array'
+        ? `writer.WriteLength(${value}.Count, ${PRIMITIVE_SIZES[type.length]});`
+        : `${this.codec}.CheckCount(${value}, ${type.size}, ${csharpString(name)});`;
+    return [
+      header,
+      `foreach (${this.csType(type.element)} item in ${value})`,
+      '{',
+      `${INDENT}${this.write(type.element, 'item', name)};`,
+      '}',
+    ];
+  }
+
+  /** The member as its plain type; a conditional one has passed CheckPresent before this runs. */
+  private value(field: MemberField): string {
+    const value = `this.${this.member(field)}`;
+    if (!field.condition) return value;
+    const valueType = field.type.kind === 'primitive' || field.type.kind === 'enum';
+    return valueType ? `${value}.GetValueOrDefault()` : `${value}!`;
+  }
+
+  private writeBits(group: Field, type: BitsType, local: string): string[] {
     const statements = [`uint ${local} = 0;`];
     for (const { field, offset } of bitLayout(type.fields)) {
-      const member = this.member(bitMember(field));
+      const member = bitMember(field, group.condition);
+      const name = this.member(member);
       const shift = offset === 0 ? '' : ` << ${offset}`;
       if (field.type.kind === 'bool') {
-        const bit = `this.${member} ? 1u : 0u`;
+        const bit = `${this.value(member)} ? 1u : 0u`;
         statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
         continue;
       }
       // An enum has no implicit conversion, and a negative one must still fail the check.
-      const value = field.type.kind === 'enum' ? `(ulong)this.${member}` : `this.${member}`;
+      const value =
+        field.type.kind === 'enum' ? `(ulong)${this.value(member)}` : this.value(member);
       statements.push(
-        `${local} |= ${this.codec}.CheckBits(${value}, ${field.bits}, ${csharpString(member)})${shift};`,
+        `${local} |= ${this.codec}.CheckBits(${value}, ${field.bits}, ${csharpString(name)})${shift};`,
       );
     }
     const value = type.base === 'u32' ? local : `(${PRIMITIVE_CS[type.base]})${local}`;
@@ -942,31 +1016,14 @@ ${members}
 
   private readMethod(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const { type } = field;
-      if (type.kind === 'bits') return this.readBits(type, `${camelCase(field.name)}Bits`);
-      const member = this.member(field as MemberField);
-      const target = `result.${member}`;
-      if (type.kind === 'array') {
-        const count = `${member.charAt(0).toLowerCase()}${member.slice(1)}Count`;
-        return [
-          `int ${count} = reader.ReadLength(${PRIMITIVE_SIZES[type.length]});`,
-          `${target} = ${this.codec}.NewList<${this.csType(type.element)}>(${count}, reader);`,
-          `for (int i = 0; i < ${count}; i++)`,
-          '{',
-          `${INDENT}${target}.Add(${this.read(type.element)});`,
-          '}',
-        ];
-      }
-      if (type.kind === 'fixedArray') {
-        return [
-          `${target} = new List<${this.csType(type.element)}>(${type.size});`,
-          `for (int i = 0; i < ${type.size}; i++)`,
-          '{',
-          `${INDENT}${target}.Add(${this.read(type.element)});`,
-          '}',
-        ];
-      }
-      return [`${target} = ${this.read(type)};`];
+      const body = this.readField(field);
+      if (!field.condition) return body;
+      return [
+        `if (${this.condition(fields, field.condition, 'result')})`,
+        '{',
+        ...body.map((line) => `${INDENT}${line}`),
+        '}',
+      ];
     });
     return `    /// <summary>Reads a <see cref="${name}"/> starting at the reader's position.</summary>
     public static ${name} ReadFrom(PacketReader reader)
@@ -976,10 +1033,57 @@ ${indentLines(statements)}        return result;
     }`;
   }
 
-  private readBits(type: BitsType, local: string): string[] {
+  private readField(field: Field): string[] {
+    const { type } = field;
+    if (type.kind === 'bits') return this.readBits(field, type, `${camelCase(field.name)}Bits`);
+    const member = this.member(field as MemberField);
+    const target = `result.${member}`;
+    if (type.kind === 'array') {
+      const count = `${member.charAt(0).toLowerCase()}${member.slice(1)}Count`;
+      return [
+        `int ${count} = reader.ReadLength(${PRIMITIVE_SIZES[type.length]});`,
+        `${target} = ${this.codec}.NewList<${this.csType(type.element)}>(${count}, reader);`,
+        `for (int i = 0; i < ${count}; i++)`,
+        '{',
+        `${INDENT}${target}.Add(${this.read(type.element)});`,
+        '}',
+      ];
+    }
+    if (type.kind === 'fixedArray') {
+      return [
+        `${target} = new List<${this.csType(type.element)}>(${type.size});`,
+        `for (int i = 0; i < ${type.size}; i++)`,
+        '{',
+        `${INDENT}${target}.Add(${this.read(type.element)});`,
+        '}',
+      ];
+    }
+    return [`${target} = ${this.read(type)};`];
+  }
+
+  /** Tests a condition on `owner`; a target that is itself null never matches. */
+  private condition(fields: Field[], condition: Condition, owner: string): string {
+    const target = conditionTarget(fields, condition);
+    const value = `${owner}.${this.member(target)}`;
+    if (condition.kind === 'true') return target.condition ? `${value} == true` : value;
+    // Comparisons with a nullable value are lifted, so they are false while it is null.
+    return condition.values.map((v) => `${value} == ${this.literal(target.type, v)}`).join(' || ');
+  }
+
+  private literal(type: MemberType, value: number): string {
+    if (type.kind === 'enum') {
+      const { values } = findEnum(this.protocol, type.name);
+      const index = values.findIndex((v) => v.value === value);
+      return `${type.name}.${this.enumMembers.get(type.name)![index]}`;
+    }
+    const suffix = type.kind === 'primitive' ? LITERAL_SUFFIXES[type.name] : undefined;
+    return `${value}${suffix ?? ''}`;
+  }
+
+  private readBits(group: Field, type: BitsType, local: string): string[] {
     const statements = [`uint ${local} = reader.Read${WIRE_NAMES[type.base]}();`];
     for (const { field, offset } of bitLayout(type.fields)) {
-      const target = `result.${this.member(bitMember(field))}`;
+      const target = `result.${this.member(bitMember(field, group.condition))}`;
       const shifted = offset === 0 ? local : `(${local} >> ${offset})`;
       const bits = `${shifted} & ${hex(2 ** field.bits - 1)}u`;
       if (field.type.kind === 'bool') {
@@ -1023,12 +1127,14 @@ ${indentLines(statements)}        return result;
       if (type.kind === 'primitive' || type.kind === 'enum' || type.kind === 'string') {
         return `this.${n} == other.${n}`;
       }
-      if (type.kind === 'bytes' || type.kind === 'fixedBytes') {
-        return `${this.codec}.BytesEqual(this.${n}, other.${n})`;
+      const bytes = type.kind === 'bytes' || type.kind === 'fixedBytes';
+      const list = type.kind === 'array' || type.kind === 'fixedArray';
+      if (field.condition && (bytes || list)) {
+        const method = bytes ? 'BytesEqual' : 'ListEqual';
+        return `${this.codec}.OptionalEqual(this.${n}, other.${n}, (a, b) => ${this.codec}.${method}(a, b))`;
       }
-      if (type.kind === 'array' || type.kind === 'fixedArray') {
-        return `${this.codec}.ListEqual(this.${n}, other.${n})`;
-      }
+      if (bytes) return `${this.codec}.BytesEqual(this.${n}, other.${n})`;
+      if (list) return `${this.codec}.ListEqual(this.${n}, other.${n})`;
       return `Equals(this.${n}, other.${n})`;
     });
     const expression = ['other is not null', ...comparisons].join('\n            && ');
@@ -1057,13 +1163,15 @@ ${indentLines(statements)}        return result;
     const additions = fields.map((field) => {
       const n = this.member(field);
       const { type } = field;
-      if (type.kind === 'bytes' || type.kind === 'fixedBytes') {
-        return `hash.Add(${this.codec}.BytesHash(this.${n}));`;
-      }
-      if (type.kind === 'array' || type.kind === 'fixedArray') {
-        return `hash.Add(${this.codec}.ListHash(this.${n}));`;
-      }
-      return `hash.Add(this.${n});`;
+      const hash =
+        type.kind === 'bytes' || type.kind === 'fixedBytes'
+          ? 'BytesHash'
+          : type.kind === 'array' || type.kind === 'fixedArray'
+            ? 'ListHash'
+            : undefined;
+      if (!hash) return `hash.Add(this.${n});`;
+      const value = `${this.codec}.${hash}(this.${n})`;
+      return `hash.Add(${field.condition ? `this.${n} is null ? 0 : ${value}` : value});`;
     });
     return `    public override int GetHashCode()
     {
@@ -1076,7 +1184,8 @@ ${indentLines(additions)}        return hash.ToHashCode();
     const parts = fields.map((field, index) => {
       const n = this.member(field);
       const label = csharpString(`${index === 0 ? '' : ', '}${n}=`);
-      return `${label} + ${this.codec}.Format(this.${n})`;
+      const value = `${this.codec}.Format(this.${n})`;
+      return `${label} + ${field.condition ? `(this.${n} is null ? "null" : ${value})` : value}`;
     });
     const expression =
       fields.length === 0
@@ -1086,6 +1195,11 @@ ${indentLines(additions)}        return hash.ToHashCode();
     {
         return ${expression};
     }`;
+  }
+
+  /** The declared type of a member; a conditional one is nullable. */
+  private memberType(field: MemberField): string {
+    return `${this.csType(field.type)}${field.condition ? '?' : ''}`;
   }
 
   private csType(type: MemberType): string {

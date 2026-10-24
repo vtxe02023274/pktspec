@@ -1,0 +1,70 @@
+name: conditional_fields
+version: 1
+endian: big
+opcode: u8
+doc: Fields that are only on the wire when an earlier field matches.
+
+enums:
+  Shape:
+    type: u8
+    values:
+      POINT: 0
+      CIRCLE: 1
+      RECT: 2
+      POLYGON: 3
+
+structs:
+  Point:
+    fields:
+      - { name: x, type: i16 }
+      - { name: y, type: i16 }
+  Guild:
+    fields:
+      - { name: id, type: u32 }
+      - { name: has_emblem, type: bool }
+      - { name: emblem, type: bytes, size: 4, if: has_emblem }
+  Node:
+    doc: Recursive through a conditional array.
+    fields:
+      - { name: value, type: u8 }
+      - { name: has_children, type: bool }
+      - { name: children, type: 'Node[]', length: u8, if: has_children }
+
+packets:
+  - name: Draw
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: shape, type: Shape }
+      - { name: radius, type: f32, if: { field: shape, equals: CIRCLE } }
+      - { name: corner, type: Point, if: { field: shape, in: [RECT, POLYGON] } }
+      - { name: points, type: 'Point[]', length: u8, if: { field: shape, equals: POLYGON } }
+      - { name: closed, type: bool, if: { field: shape, equals: POLYGON } }
+      - { name: fill, type: u32, if: closed, doc: Only when the polygon is closed. }
+      - name: style
+        type: u8
+        if: closed
+        bits:
+          - { name: dashed, type: bool }
+          - { name: width, bits: 4 }
+      - { name: dash, type: 'u8[2]', if: dashed }
+      - { name: label, type: string, length: u8, if: { field: width, in: [0, 15] } }
+
+  - name: Profile
+    opcode: 2
+    direction: s2c
+    fields:
+      - { name: id, type: u64 }
+      - { name: level, type: i8 }
+      - { name: bonus, type: i64, if: { field: level, equals: -128 } }
+      - name: flags
+        type: u16
+        bits:
+          - { name: in_guild, type: bool }
+          - { name: tier, bits: 3 }
+          - { name: kind, type: Shape, bits: 2 }
+      - { name: guild, type: Guild, if: in_guild }
+      - { name: title, type: string, if: { field: tier, equals: 7 } }
+      - { name: sides, type: u8, if: { field: kind, equals: POLYGON } }
+      - { name: avatar, type: bytes, length: u8, if: { field: id, in: [0, 9007199254740991] } }
+      - { name: tree, type: Node, if: in_guild }

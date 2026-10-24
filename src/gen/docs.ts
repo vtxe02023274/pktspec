@@ -1,10 +1,14 @@
 import {
   PRIMITIVE_SIZES,
   bitLayout,
+  conditionTarget,
   fieldsSize,
+  findEnum,
+  hasConditions,
   wireSize,
   type BitField,
   type BitsType,
+  type Condition,
   type ElementType,
   type Field,
   type FieldType,
@@ -32,6 +36,9 @@ function render(protocol: Protocol): string {
   out.push(
     'Every packet starts with its opcode, followed by the fields below in order.',
     'Strings are UTF-8; their length prefix counts bytes, not characters.',
+    ...(hasConditions(protocol)
+      ? ['A field with a condition is only on the wire while its condition holds.']
+      : []),
     '',
   );
 
@@ -86,20 +93,38 @@ function render(protocol: Protocol): string {
 
 function fieldTable(fields: Field[], protocol: Protocol): string[] {
   if (fields.length === 0) return ['No fields.', ''];
-  const rows = fields.map(
-    (field) =>
-      `| ${code(field.name)} | ${typeName(field.type)} | ${fieldSize(field.type, protocol)} | ${cell(field.doc ?? '')} |`,
-  );
+  // The column only appears where it is needed, so tables without conditions stay as they were.
+  const conditional = fields.some((field) => field.condition);
+  const rows = fields.map((field) => {
+    const when = conditional
+      ? ` ${field.condition ? conditionText(fields, field.condition, protocol) : ''} |`
+      : '';
+    return `| ${code(field.name)} | ${typeName(field.type)} | ${fieldSize(field.type, protocol)} |${when} ${cell(field.doc ?? '')} |`;
+  });
   const bitTables = fields.flatMap((field) =>
     field.type.kind === 'bits' ? bitTable(field.name, field.type) : [],
   );
   return [
-    '| Field | Type | Size (bytes) | Description |',
-    '| --- | --- | --- | --- |',
+    conditional
+      ? '| Field | Type | Size (bytes) | Present when | Description |'
+      : '| Field | Type | Size (bytes) | Description |',
+    conditional ? '| --- | --- | --- | --- | --- |' : '| --- | --- | --- | --- |',
     ...rows,
     '',
     ...bitTables,
   ];
+}
+
+function conditionText(fields: Field[], condition: Condition, protocol: Protocol): string {
+  const name = code(condition.field);
+  if (condition.kind === 'true') return `${name} is true`;
+  const { type } = conditionTarget(fields, condition);
+  const values = condition.values.map((value) =>
+    type.kind === 'enum'
+      ? code(findEnum(protocol, type.name).values.find((v) => v.value === value)!.name)
+      : String(value),
+  );
+  return values.length === 1 ? `${name} = ${values[0]}` : `${name} is one of ${values.join(', ')}`;
 }
 
 function bitTable(name: string, type: BitsType): string[] {

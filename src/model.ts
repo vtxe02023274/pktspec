@@ -36,16 +36,27 @@ export interface BitField {
   doc?: string;
 }
 
+/**
+ * Makes a field present on the wire only when an earlier field of the same struct or packet
+ * matches: a bool (or bool bit field) that is true, or an integer or enum holding one of `values`.
+ * A field that is itself absent never matches.
+ */
+export type Condition =
+  { kind: 'true'; field: string } | { kind: 'in'; field: string; values: number[] };
+
 export interface Field {
   name: string;
   type: FieldType;
   doc?: string;
+  condition?: Condition;
 }
 
 export interface MemberField {
   name: string;
   type: MemberType;
   doc?: string;
+  /** For a bit field, the condition of its group. */
+  condition?: Condition;
 }
 
 export interface Struct {
@@ -144,6 +155,10 @@ export function fieldsSize(fields: Field[], protocol: Protocol): WireSize {
   let min = 0;
   let fixed = true;
   for (const field of fields) {
+    if (field.condition) {
+      fixed = false;
+      continue;
+    }
     const size = wireSize(field.type, protocol);
     min += size.min;
     fixed &&= size.fixed;
@@ -202,20 +217,45 @@ export function bitEnums(protocol: Protocol): Set<string> {
 }
 
 const bitMembers = new WeakMap<BitField, MemberField>();
+const conditionalBitMembers = new WeakMap<BitField, MemberField>();
 
-/** The bit field as a plain field; the same object comes back every time, so it can key a map. */
-export function bitMember(bit: BitField): MemberField {
-  let member = bitMembers.get(bit);
+/**
+ * The bit field as a plain field, with the condition of its group; the same object comes back
+ * every time, so it can key a map. A bit field belongs to one group, so it has one condition.
+ */
+export function bitMember(bit: BitField, condition?: Condition): MemberField {
+  const cache = condition ? conditionalBitMembers : bitMembers;
+  let member = cache.get(bit);
   if (!member) {
     member = { name: bit.name, type: bitMemberType(bit), doc: bit.doc };
-    bitMembers.set(bit, member);
+    if (condition) member.condition = condition;
+    cache.set(bit, member);
   }
   return member;
 }
 
+/** The members of one field: the field itself, or one per bit field of a group. */
+export function fieldMembers(field: Field): MemberField[] {
+  return field.type.kind === 'bits'
+    ? field.type.fields.map((bit) => bitMember(bit, field.condition))
+    : [field as MemberField];
+}
+
 /** The fields as generated code exposes them, with each bit field group replaced by its members. */
 export function memberFields(fields: Field[]): MemberField[] {
-  return fields.flatMap((field) =>
-    field.type.kind === 'bits' ? field.type.fields.map(bitMember) : [field as MemberField],
+  return fields.flatMap(fieldMembers);
+}
+
+/** The member a condition tests; `check` makes sure it comes before the conditional field. */
+export function conditionTarget(fields: Field[], condition: Condition): MemberField {
+  const found = memberFields(fields).find((member) => member.name === condition.field);
+  if (!found) throw new Error(`unknown condition field ${condition.field}`);
+  return found;
+}
+
+/** Whether any struct or packet has a conditional field. */
+export function hasConditions(protocol: Protocol): boolean {
+  return [...protocol.structs, ...protocol.packets].some(({ fields }) =>
+    fields.some((field) => field.condition !== undefined),
   );
 }

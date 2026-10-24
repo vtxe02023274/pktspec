@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateWireshark } from '../src/gen/wireshark.js';
-import { allTypes, bitFields, chatRoom } from './helpers.js';
+import { allTypes, bitFields, chatRoom, conditionalFields } from './helpers.js';
 
 function lua(protocol = chatRoom(), port?: number): string {
   return generateWireshark(protocol, { port })[0]!.content;
@@ -11,6 +11,7 @@ describe('generateWireshark', () => {
     ['chat-room', chatRoom],
     ['all-types', allTypes],
     ['bit-fields', bitFields],
+    ['conditional-fields', conditionalFields],
   ] as const) {
     it(`matches the golden file for ${name}`, async () => {
       const files = generateWireshark(load());

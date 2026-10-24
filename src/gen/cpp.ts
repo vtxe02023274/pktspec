@@ -4,11 +4,15 @@ import {
   bitGroups,
   bitLayout,
   bitMember,
+  conditionTarget,
+  fieldMembers,
   findEnum,
   findStruct,
+  hasConditions,
   memberFields,
   wireSize,
   type BitsType,
+  type Condition,
   type ElementType,
   type Enum,
   type EnumBaseType,
@@ -138,6 +142,26 @@ inline std::uint32_t checkBits(std::uint32_t value, unsigned bits, const char* f
                                " bits: " + std::to_string(value));
     }
     return value;
+}
+`;
+
+const CHECK_PRESENT = `
+// Throws PacketRangeError unless a conditional field holds a value exactly when its condition is true.
+template <typename T>
+void checkPresent(const std::optional<T>& value, bool present, const char* field) {
+    if (present && !value.has_value()) {
+        throw PacketRangeError(std::string(field) + " is required by its condition");
+    }
+    if (!present && value.has_value()) {
+        throw PacketRangeError(std::string(field) + " must be empty because its condition is false");
+    }
+}
+`;
+
+const SAME_OPTIONAL = `
+template <typename T>
+bool same(const std::optional<T>& a, const std::optional<T>& b) {
+    return a.has_value() == b.has_value() && (!a.has_value() || same(*a, *b));
 }
 `;
 
@@ -602,11 +626,20 @@ private:
     const opcodeSize = PRIMITIVE_SIZES[this.protocol.opcode];
     const opcodeMethod = WIRE_NAMES[this.protocol.opcode];
     const bits = bitGroups(this.protocol).length > 0;
+    const conditions = hasConditions(this.protocol);
+    const standard = [
+      '<array>',
+      '<cstddef>',
+      '<cstdint>',
+      ...(conditions ? ['<optional>'] : []),
+      ...(bits || conditions ? ['<string>'] : []),
+      '<vector>',
+    ];
     return this.file(
-      ['<array>', '<cstddef>', '<cstdint>', ...(bits ? ['<string>'] : []), '<vector>'],
+      standard,
       ['PacketErrors.hpp', 'PacketReader.hpp', 'PacketWriter.hpp'],
       `namespace detail {
-${bits ? CHECK_BITS : ''}
+${bits ? CHECK_BITS : ''}${conditions ? CHECK_PRESENT : ''}
 // Equality that treats two NaN values as equal, so a decoded packet equals the one that was sent.
 template <typename T>
 bool same(const T& a, const T& b) {
@@ -643,7 +676,7 @@ bool same(const std::array<T, N>& a, const std::array<T, N>& b) {
     }
     return true;
 }
-
+${conditions ? SAME_OPTIONAL : ''}
 template <std::size_t N, typename T>
 std::array<T, N> filled(const T& value) {
     std::array<T, N> result{};
@@ -875,6 +908,7 @@ ${cases}
       [/std::string/, '<string>'],
       [/std::vector/, '<vector>'],
       [/std::array/, '<array>'],
+      [/std::optional/, '<optional>'],
       [/std::move/, '<utility>'],
     ];
     for (const [pattern, header] of uses) {
@@ -901,15 +935,17 @@ ${cases}
       members.push(
         exposed
           .map((field) => {
-            const declaration = `${this.cppType(field.type)} ${this.member(field)}`;
-            return (
-              cppDoc(field.doc, INDENT) + `${INDENT}${this.initializer(declaration, field.type)};`
-            );
+            const declaration = `${this.memberType(field)} ${this.member(field)}`;
+            // A conditional field starts empty, as it is while its condition is false.
+            const initialized = field.condition
+              ? `${declaration}{}`
+              : this.initializer(declaration, field.type);
+            return cppDoc(field.doc, INDENT) + `${INDENT}${initialized};`;
           })
           .join('\n'),
       );
     }
-    const params = exposed.map((f) => `${this.cppType(f.type)} ${this.paramNames.get(f)!}`);
+    const params = exposed.map((f) => `${this.memberType(f)} ${this.paramNames.get(f)!}`);
     const constructors = [`${INDENT}${name}() = default;`];
     if (exposed.length > 0) {
       const explicit = exposed.length === 1 ? 'explicit ' : '';
@@ -983,35 +1019,63 @@ ${cases}
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const { type } = field;
-      const size = wireSize(type, this.protocol);
-      if (size.fixed) {
-        fixed += size.min;
+      const size = this.fieldSize(field);
+      if (!field.condition) {
+        fixed += size.fixed;
+        statements.push(...size.statements);
         continue;
       }
-      const value = `this->${this.member(field as MemberField)}`;
-      if (type.kind === 'array' || type.kind === 'fixedArray') {
-        const element = wireSize(type.element, this.protocol);
-        fixed += type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
-        if (element.fixed) {
-          const count = `${value}.size()`;
-          statements.push(`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`);
-        } else {
-          statements.push(
-            `for (const auto& item : ${value}) {`,
-            `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
-            '}',
-          );
-        }
-      } else {
-        statements.push(`size += ${this.variableSize(type, value)};`);
-      }
+      // Counted by what the field holds, so that writeTo is the one to report a mismatch.
+      const presence = `this->${this.member(fieldMembers(field)[0]!)}`;
+      const inner = [...(size.fixed > 0 ? [`size += ${size.fixed};`] : []), ...size.statements];
+      statements.push(
+        `if (${presence}.has_value()) {`,
+        ...inner.map((line) => `${INDENT}${line}`),
+        '}',
+      );
     }
     const body =
       statements.length === 0
         ? indentLines([`return ${fixed};`])
         : indentLines([`std::size_t size = ${fixed};`, ...statements, 'return size;']);
     return `inline std::size_t ${name}::${method}() const {\n${body}}`;
+  }
+
+  private fieldSize(field: Field): { fixed: number; statements: string[] } {
+    const { type } = field;
+    const size = wireSize(type, this.protocol);
+    if (size.fixed) return { fixed: size.min, statements: [] };
+    const value = this.value(field as MemberField);
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return { fixed: 0, statements: [`size += ${this.variableSize(type, value)};`] };
+    }
+    const element = wireSize(type.element, this.protocol);
+    const fixed = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
+    if (element.fixed) {
+      const count = `${value}.size()`;
+      return {
+        fixed,
+        statements: [`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`],
+      };
+    }
+    return {
+      fixed,
+      statements: [
+        `for (const auto& item : ${value}) {`,
+        `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
+        '}',
+      ],
+    };
+  }
+
+  /** The member as its plain type; a conditional one is only read once it is known to be set. */
+  private value(field: MemberField, owner = 'this->'): string {
+    const value = `${owner}${this.member(field)}`;
+    if (!field.condition) return value;
+    const { kind } = field.type;
+    return kind === 'primitive' || kind === 'enum' || kind === 'fixedBytes'
+      ? `*${value}`
+      : `(*${value})`;
   }
 
   private variableSize(type: FieldType, value: string): string {
@@ -1028,18 +1092,18 @@ ${cases}
 
   private writeDefinition(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const { type } = field;
-      if (type.kind === 'bits') return this.writeBits(type, `${camelCase(field.name)}Bits`);
-      const value = `this->${this.member(field as MemberField)}`;
-      if (type.kind !== 'array' && type.kind !== 'fixedArray') {
-        return [`${this.write(type, value)};`];
-      }
+      const body = this.writeField(field);
+      if (!field.condition) return body;
+      const present = `${camelCase(field.name)}Present`;
+      const checks = fieldMembers(field).map((member) => {
+        const name = this.member(member);
+        return `detail::checkPresent(this->${name}, ${present}, ${cppString(name)});`;
+      });
       return [
-        ...(type.kind === 'array'
-          ? [`writer.writeLength(${value}.size(), ${PRIMITIVE_SIZES[type.length]});`]
-          : []),
-        `for (const auto& item : ${value}) {`,
-        `${INDENT}${this.write(type.element, 'item')};`,
+        `const bool ${present} = ${this.condition(fields, field.condition, 'this->')};`,
+        ...checks,
+        `if (${present}) {`,
+        ...body.map((line) => `${INDENT}${line}`),
         '}',
       ];
     });
@@ -1047,23 +1111,41 @@ ${cases}
     return `inline void ${name}::writeTo(${parameter}) const {\n${indentLines(statements)}}`;
   }
 
-  private writeBits(type: BitsType, local: string): string[] {
+  private writeField(field: Field): string[] {
+    const { type } = field;
+    if (type.kind === 'bits') return this.writeBits(field, type, `${camelCase(field.name)}Bits`);
+    const value = this.value(field as MemberField);
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return [`${this.write(type, value)};`];
+    }
+    return [
+      ...(type.kind === 'array'
+        ? [`writer.writeLength(${value}.size(), ${PRIMITIVE_SIZES[type.length]});`]
+        : []),
+      `for (const auto& item : ${value}) {`,
+      `${INDENT}${this.write(type.element, 'item')};`,
+      '}',
+    ];
+  }
+
+  private writeBits(group: Field, type: BitsType, local: string): string[] {
     const statements = [`std::uint32_t ${local} = 0;`];
     for (const { field, offset } of bitLayout(type.fields)) {
-      const member = this.member(bitMember(field));
+      const member = bitMember(field, group.condition);
+      const name = this.member(member);
       const shift = offset === 0 ? '' : ` << ${offset}`;
       if (field.type.kind === 'bool') {
-        const bit = `this->${member} ? 1u : 0u`;
+        const bit = `${this.value(member)} ? 1u : 0u`;
         statements.push(`${local} |= ${offset === 0 ? bit : `(${bit})${shift}`};`);
         continue;
       }
       // Converting a negative enum value wraps around, so the check still rejects it.
       const value =
         field.type.kind === 'enum'
-          ? `static_cast<std::uint32_t>(this->${member})`
-          : `this->${member}`;
+          ? `static_cast<std::uint32_t>(${this.value(member)})`
+          : this.value(member);
       statements.push(
-        `${local} |= detail::checkBits(${value}, ${field.bits}, ${cppString(member)})${shift};`,
+        `${local} |= detail::checkBits(${value}, ${field.bits}, ${cppString(name)})${shift};`,
       );
     }
     const value =
@@ -1096,28 +1178,13 @@ ${cases}
       return `inline ${name} ${name}::readFrom(PacketReader&) {\n${INDENT}return ${name}();\n}`;
     }
     const statements = fields.flatMap((field) => {
-      const { type } = field;
-      if (type.kind === 'bits') return this.readBits(type, `${camelCase(field.name)}Bits`);
-      const member = this.member(field as MemberField);
-      const target = `result.${member}`;
-      if (type.kind === 'array') {
-        const count = `${member}Count`;
-        return [
-          `const std::size_t ${count} = reader.readLength(${PRIMITIVE_SIZES[type.length]});`,
-          `reader.reserveFor(${target}, ${count});`,
-          `for (std::size_t i = 0; i < ${count}; ++i) {`,
-          `${INDENT}${target}.push_back(${this.read(type.element)});`,
-          '}',
-        ];
-      }
-      if (type.kind === 'fixedArray') {
-        return [
-          `for (auto& item : ${target}) {`,
-          `${INDENT}item = ${this.read(type.element)};`,
-          '}',
-        ];
-      }
-      return [`${target} = ${this.read(type)};`];
+      const body = this.readField(field);
+      if (!field.condition) return body;
+      return [
+        `if (${this.condition(fields, field.condition, 'result.')}) {`,
+        ...body.map((line) => `${INDENT}${line}`),
+        '}',
+      ];
     });
     return `inline ${name} ${name}::readFrom(PacketReader& reader) {
 ${INDENT}${name} result;
@@ -1125,10 +1192,61 @@ ${indentLines(statements)}${INDENT}return result;
 }`;
   }
 
-  private readBits(type: BitsType, local: string): string[] {
+  private readField(field: Field): string[] {
+    const { type } = field;
+    if (type.kind === 'bits') return this.readBits(field, type, `${camelCase(field.name)}Bits`);
+    const member = this.member(field as MemberField);
+    // An array is filled in place, so a conditional one is given its value first.
+    const array = type.kind === 'array' || type.kind === 'fixedArray';
+    const start = field.condition && array ? [`result.${member}.emplace();`] : [];
+    const target = this.value(field as MemberField, 'result.');
+    if (type.kind === 'array') {
+      const count = `${member}Count`;
+      return [
+        `const std::size_t ${count} = reader.readLength(${PRIMITIVE_SIZES[type.length]});`,
+        ...start,
+        `reader.reserveFor(${target}, ${count});`,
+        `for (std::size_t i = 0; i < ${count}; ++i) {`,
+        `${INDENT}${target}.push_back(${this.read(type.element)});`,
+        '}',
+      ];
+    }
+    if (type.kind === 'fixedArray') {
+      return [
+        ...start,
+        `for (auto& item : ${target}) {`,
+        `${INDENT}item = ${this.read(type.element)};`,
+        '}',
+      ];
+    }
+    return [`result.${member} = ${this.read(type)};`];
+  }
+
+  /** Tests a condition on `owner`; a target that is itself empty never matches. */
+  private condition(fields: Field[], condition: Condition, owner: string): string {
+    const target = conditionTarget(fields, condition);
+    const value = `${owner}${this.member(target)}`;
+    if (condition.kind === 'true') return target.condition ? `${value} == true` : value;
+    // Comparing an empty std::optional with a value gives false.
+    return condition.values.map((v) => `${value} == ${this.literal(target.type, v)}`).join(' || ');
+  }
+
+  private literal(type: MemberType, value: number): string {
+    if (type.kind === 'enum') {
+      const { values } = findEnum(this.protocol, type.name);
+      const index = values.findIndex((v) => v.value === value);
+      return `${type.name}::${this.enumMembers.get(type.name)![index]}`;
+    }
+    if (type.kind === 'primitive' && (type.name === 'u32' || type.name === 'u64')) {
+      return `${value}u`;
+    }
+    return intLiteral(value, 'i32');
+  }
+
+  private readBits(group: Field, type: BitsType, local: string): string[] {
     const statements = [`const std::uint32_t ${local} = reader.read${WIRE_NAMES[type.base]}();`];
     for (const { field, offset } of bitLayout(type.fields)) {
-      const target = `result.${this.member(bitMember(field))}`;
+      const target = `result.${this.member(bitMember(field, group.condition))}`;
       const shifted = offset === 0 ? local : `(${local} >> ${offset})`;
       const bits = `${shifted} & ${hex(2 ** field.bits - 1)}u`;
       if (field.type.kind === 'bool') {
@@ -1178,6 +1296,12 @@ ${indentLines(statements)}${INDENT}return result;
     return `inline bool ${name}::operator==(const ${name}& other) const {
 ${INDENT}return ${comparisons.join(`\n${INDENT}${INDENT}&& `)};
 }`;
+  }
+
+  /** The declared type of a member; a conditional one is a std::optional. */
+  private memberType(field: MemberField): string {
+    const type = this.cppType(field.type);
+    return field.condition ? `std::optional<${type}>` : type;
   }
 
   private cppType(type: MemberType): string {

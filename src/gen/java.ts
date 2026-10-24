@@ -2,10 +2,14 @@ import {
   PRIMITIVE_SIZES,
   bitGroups,
   bitLayout,
+  conditionTarget,
+  fieldMembers,
   findEnum,
+  hasConditions,
   memberFields,
   wireSize,
   type BitsType,
+  type Condition,
   type ElementType,
   type Enum,
   type Field,
@@ -91,6 +95,18 @@ const CHECK_BITS = `    static long checkBits(long value, int bits, String field
                     field + " out of range for " + bits + " bits: " + value);
         }
         return value;
+    }
+
+`;
+
+const CHECK_PRESENT = `    static void checkPresent(Object value, boolean present, String field) {
+        if (present && value == null) {
+            throw new IllegalArgumentException(field + " is required by its condition");
+        }
+        if (!present && value != null) {
+            throw new IllegalArgumentException(
+                    field + " must be null because its condition is false");
+        }
     }
 
 `;
@@ -225,7 +241,7 @@ final class ${this.codec} {
         return buf.getInt() & 0xFFFFFFFFL;
     }
 
-${bitGroups(this.protocol).length > 0 ? CHECK_BITS : ''}    static void writeBool(ByteBuffer buf, boolean value) {
+${bitGroups(this.protocol).length > 0 ? CHECK_BITS : ''}${hasConditions(this.protocol) ? CHECK_PRESENT : ''}    static void writeBool(ByteBuffer buf, boolean value) {
         buf.put(value ? (byte) 1 : (byte) 0);
     }
 
@@ -463,8 +479,9 @@ ${constants};
       members.push(
         exposed
           .map((field) => {
-            const initializer = this.defaultValue(field.type);
-            const declaration = `public ${this.javaType(field.type)} ${fieldName(field.name)}`;
+            // A conditional field stays null while its condition is false.
+            const initializer = field.condition ? undefined : this.defaultValue(field.type);
+            const declaration = `public ${this.memberType(field)} ${fieldName(field.name)}`;
             return (
               javadoc(field.doc, INDENT) +
               `${INDENT}${declaration}${initializer ? ` = ${initializer}` : ''};`
@@ -505,7 +522,7 @@ ${constants};
   private constructors(name: string, fields: MemberField[]): string {
     const empty = `    public ${name}() {}`;
     if (fields.length === 0) return empty;
-    const parameters = fields.map((f) => `${this.javaType(f.type)} ${fieldName(f.name)}`);
+    const parameters = fields.map((f) => `${this.memberType(f)} ${fieldName(f.name)}`);
     const assignments = fields.map(
       (f) => `        this.${fieldName(f.name)} = ${fieldName(f.name)};`,
     );
@@ -521,28 +538,20 @@ ${constants};
     let fixed = 0;
     const statements: string[] = [];
     for (const field of fields) {
-      const value = `this.${fieldName(field.name)}`;
-      const { type } = field;
-      const size = wireSize(type, this.protocol);
-      if (size.fixed) {
-        fixed += size.min;
-      } else if (type.kind === 'array' || type.kind === 'fixedArray') {
-        const element = wireSize(type.element, this.protocol);
-        const prefix = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
-        fixed += prefix;
-        if (element.fixed) {
-          const count = `${value}.size()`;
-          statements.push(`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`);
-        } else {
-          statements.push(
-            `for (${this.javaType(type.element)} item : ${value}) {`,
-            `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
-            '}',
-          );
-        }
-      } else {
-        statements.push(`size += ${this.variableSize(type, value)};`);
+      const size = this.fieldSize(field);
+      if (!field.condition) {
+        fixed += size.fixed;
+        statements.push(...size.statements);
+        continue;
       }
+      // Counted by what the field holds, so that writeTo is the one to report a mismatch.
+      const presence = `this.${fieldName(fieldMembers(field)[0]!.name)}`;
+      const inner = [...(size.fixed > 0 ? [`size += ${size.fixed};`] : []), ...size.statements];
+      statements.push(
+        `if (${presence} != null) {`,
+        ...inner.map((line) => `${INDENT}${line}`),
+        '}',
+      );
     }
     const method = isPacket ? '@Override\n    public int bodySize()' : 'public int encodedSize()';
     const doc = isPacket ? '' : '    /** Number of bytes {@link #writeTo} writes. */\n';
@@ -551,6 +560,33 @@ ${constants};
         ? `        return ${fixed};\n`
         : indentLines([`int size = ${fixed};`, ...statements, 'return size;']);
     return `${doc}    ${method} {\n${body}    }`;
+  }
+
+  private fieldSize(field: Field): { fixed: number; statements: string[] } {
+    const value = `this.${fieldName(field.name)}`;
+    const { type } = field;
+    const size = wireSize(type, this.protocol);
+    if (size.fixed) return { fixed: size.min, statements: [] };
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return { fixed: 0, statements: [`size += ${this.variableSize(type, value)};`] };
+    }
+    const element = wireSize(type.element, this.protocol);
+    const fixed = type.kind === 'array' ? PRIMITIVE_SIZES[type.length] : 0;
+    if (element.fixed) {
+      const count = `${value}.size()`;
+      return {
+        fixed,
+        statements: [`size += ${element.min === 1 ? count : `${count} * ${element.min}`};`],
+      };
+    }
+    return {
+      fixed,
+      statements: [
+        `for (${this.javaType(type.element)} item : ${value}) {`,
+        `${INDENT}size += ${this.variableSize(type.element, 'item')};`,
+        '}',
+      ],
+    };
   }
 
   private variableSize(type: FieldType, value: string): string {
@@ -568,21 +604,18 @@ ${constants};
 
   private writeMethod(fields: Field[], isPacket: boolean): string {
     const statements = fields.flatMap((field) => {
-      const name = fieldName(field.name);
-      const value = `this.${name}`;
-      const { type } = field;
-      if (type.kind === 'bits') return this.writeBits(type, `${name}Bits`);
-      if (type.kind !== 'array' && type.kind !== 'fixedArray') {
-        return [`${this.write(type, value, name)};`];
-      }
-      const header =
-        type.kind === 'array'
-          ? `${this.codec}.writeLength(buf, ${value}.size(), ${PRIMITIVE_SIZES[type.length]});`
-          : `${this.codec}.checkCount(${value}, ${type.size}, ${javaString(name)});`;
+      const body = this.writeField(field);
+      if (!field.condition) return body;
+      const present = `${fieldName(field.name)}Present`;
+      const checks = fieldMembers(field).map((member) => {
+        const name = fieldName(member.name);
+        return `${this.codec}.checkPresent(this.${name}, ${present}, ${javaString(name)});`;
+      });
       return [
-        header,
-        `for (${this.javaType(type.element)} item : ${value}) {`,
-        `${INDENT}${this.write(type.element, 'item', name)};`,
+        `boolean ${present} = ${this.condition(fields, field.condition, 'this')};`,
+        ...checks,
+        `if (${present}) {`,
+        ...body.map((line) => `${INDENT}${line}`),
         '}',
       ];
     });
@@ -595,6 +628,26 @@ ${constants};
      */
 `;
     return `${doc}    public void writeTo(ByteBuffer buf) {\n${indentLines(statements)}    }`;
+  }
+
+  private writeField(field: Field): string[] {
+    const name = fieldName(field.name);
+    const value = `this.${name}`;
+    const { type } = field;
+    if (type.kind === 'bits') return this.writeBits(type, `${name}Bits`);
+    if (type.kind !== 'array' && type.kind !== 'fixedArray') {
+      return [`${this.write(type, value, name)};`];
+    }
+    const header =
+      type.kind === 'array'
+        ? `${this.codec}.writeLength(buf, ${value}.size(), ${PRIMITIVE_SIZES[type.length]});`
+        : `${this.codec}.checkCount(${value}, ${type.size}, ${javaString(name)});`;
+    return [
+      header,
+      `for (${this.javaType(type.element)} item : ${value}) {`,
+      `${INDENT}${this.write(type.element, 'item', name)};`,
+      '}',
+    ];
   }
 
   private writeBits(type: BitsType, local: string): string[] {
@@ -652,28 +705,13 @@ ${constants};
 
   private readMethod(name: string, fields: Field[]): string {
     const statements = fields.flatMap((field) => {
-      const target = `result.${fieldName(field.name)}`;
-      const { type } = field;
-      if (type.kind === 'bits') return this.readBits(type, `${fieldName(field.name)}Bits`);
-      if (type.kind === 'array') {
-        const count = `${fieldName(field.name)}Count`;
-        return [
-          `int ${count} = ${this.codec}.readLength(buf, ${PRIMITIVE_SIZES[type.length]});`,
-          `${target} = ${this.codec}.newList(${count}, buf);`,
-          `for (int i = 0; i < ${count}; i++) {`,
-          `${INDENT}${target}.add(${this.read(type.element)});`,
-          '}',
-        ];
-      }
-      if (type.kind === 'fixedArray') {
-        return [
-          `${target} = new ArrayList<>(${type.size});`,
-          `for (int i = 0; i < ${type.size}; i++) {`,
-          `${INDENT}${target}.add(${this.read(type.element)});`,
-          '}',
-        ];
-      }
-      return [`${target} = ${this.read(type)};`];
+      const body = this.readField(field);
+      if (!field.condition) return body;
+      return [
+        `if (${this.condition(fields, field.condition, 'result')}) {`,
+        ...body.map((line) => `${INDENT}${line}`),
+        '}',
+      ];
     });
     return `    /**
      * Reads a {@code ${name}} starting at the buffer's position.
@@ -684,6 +722,53 @@ ${constants};
         ${name} result = new ${name}();
 ${indentLines(statements)}        return result;
     }`;
+  }
+
+  private readField(field: Field): string[] {
+    const target = `result.${fieldName(field.name)}`;
+    const { type } = field;
+    if (type.kind === 'bits') return this.readBits(type, `${fieldName(field.name)}Bits`);
+    if (type.kind === 'array') {
+      const count = `${fieldName(field.name)}Count`;
+      return [
+        `int ${count} = ${this.codec}.readLength(buf, ${PRIMITIVE_SIZES[type.length]});`,
+        `${target} = ${this.codec}.newList(${count}, buf);`,
+        `for (int i = 0; i < ${count}; i++) {`,
+        `${INDENT}${target}.add(${this.read(type.element)});`,
+        '}',
+      ];
+    }
+    if (type.kind === 'fixedArray') {
+      return [
+        `${target} = new ArrayList<>(${type.size});`,
+        `for (int i = 0; i < ${type.size}; i++) {`,
+        `${INDENT}${target}.add(${this.read(type.element)});`,
+        '}',
+      ];
+    }
+    return [`${target} = ${this.read(type)};`];
+  }
+
+  /** Tests a condition on `owner`; a target that is itself absent never matches. */
+  private condition(fields: Field[], condition: Condition, owner: string): string {
+    const target = conditionTarget(fields, condition);
+    const value = `${owner}.${fieldName(target.name)}`;
+    if (condition.kind === 'true') {
+      return target.condition ? `Boolean.TRUE.equals(${value})` : value;
+    }
+    const tests = condition.values.map((v) => `${value} == ${this.literal(target.type, v)}`);
+    // Comparing enum constants is already null-safe; a boxed number is checked for null first.
+    if (target.type.kind === 'enum' || !target.condition) return tests.join(' || ');
+    return `${value} != null && ${tests.length === 1 ? tests[0] : `(${tests.join(' || ')})`}`;
+  }
+
+  private literal(type: MemberType, value: number): string {
+    if (type.kind === 'enum') {
+      const member = findEnum(this.protocol, type.name).values.find((v) => v.value === value)!;
+      return `${type.name}.${identifier(member.name)}`;
+    }
+    const wide = type.kind === 'primitive' && ['u32', 'u64', 'i64'].includes(type.name);
+    return wide ? `${value}L` : String(value);
   }
 
   private readBits(type: BitsType, local: string): string[] {
@@ -747,6 +832,10 @@ ${indentLines(statements)}        return result;
     const comparisons = fields.map((field) => {
       const n = fieldName(field.name);
       const { type } = field;
+      // Boxed and possibly null; Float.equals and Double.equals compare like compare() does.
+      if (field.condition && type.kind === 'primitive') {
+        return `Objects.equals(this.${n}, other.${n})`;
+      }
       if (type.kind === 'primitive' && type.name === 'f32') {
         return `Float.compare(this.${n}, other.${n}) == 0`;
       }
@@ -800,6 +889,11 @@ ${indentLines(statements)}        return result;
     public String toString() {
         return ${expression};
     }`;
+  }
+
+  /** The declared type of a member; a conditional one is boxed so that it can be null. */
+  private memberType(field: MemberField): string {
+    return this.javaType(field.type, field.condition !== undefined);
   }
 
   private javaType(type: MemberType, boxed = false): string {
