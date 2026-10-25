@@ -16,7 +16,14 @@ import {
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
+import {
+  allTypes,
+  bitFields,
+  chatRoom,
+  conditionalFields,
+  minimal,
+  presentFields,
+} from './helpers.js';
 
 type Variant = 'max' | 'min';
 
@@ -325,6 +332,13 @@ describe('TypeScript round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 120_000);
+
+  it('compiles a protocol with nothing but one packet and one field', () => {
+    // No enums, structs, bit fields or conditions, and no packets from the server.
+    const lines = runRoundTrip(minimal());
+    expect(lines).toContain('Ping 01ff');
+    expect(lines).toContain('Ping 0100');
   }, 120_000);
 
   it('writes conditional fields only when their condition holds', () => {

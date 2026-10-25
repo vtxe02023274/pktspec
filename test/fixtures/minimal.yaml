@@ -1,0 +1,10 @@
+name: minimal
+opcode: u8
+doc: One packet with one field, no enums, structs, bit fields or conditions, and nothing sent by the server.
+
+packets:
+  - name: Ping
+    opcode: 1
+    direction: c2s
+    fields:
+      - { name: seq, type: u8 }

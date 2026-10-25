@@ -13,6 +13,7 @@ export const chatRoom = () => loadProtocol('../examples/chat-room.yaml');
 export const allTypes = () => loadProtocol('fixtures/all-types.yaml');
 export const bitFields = () => loadProtocol('fixtures/bit-fields.yaml');
 export const conditionalFields = () => loadProtocol('fixtures/conditional-fields.yaml');
+export const minimal = () => loadProtocol('fixtures/minimal.yaml');
 
 /**
  * The fields that are on the wire when the round-trip tests give every value its maximum or its

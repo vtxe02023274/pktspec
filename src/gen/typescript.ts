@@ -516,14 +516,18 @@ ${methods}
     const checkBits =
       (bitGroups(this.protocol).length > 0 ? `\n\n${CHECK_BITS}` : '') +
       (hasConditions(this.protocol) ? `\n\n${CONDITION_HELPERS}` : '');
-    const imports: Import[] = [
-      {
-        from: './PacketErrors.js',
-        line: "import { InvalidPacketError } from './PacketErrors.js';",
-      },
-      typeImport('PacketReader'),
-      ...this.protocol.enums.map((e) => typeImport(e.name)),
-    ];
+    // Only the enum readers need these; an unused import fails under noUnusedLocals.
+    const imports: Import[] =
+      this.protocol.enums.length === 0
+        ? []
+        : [
+            {
+              from: './PacketErrors.js',
+              line: "import { InvalidPacketError } from './PacketErrors.js';",
+            },
+            typeImport('PacketReader'),
+            ...this.protocol.enums.map((e) => typeImport(e.name)),
+          ];
     return this.file(
       imports,
       `/** Helpers shared by the generated classes. */

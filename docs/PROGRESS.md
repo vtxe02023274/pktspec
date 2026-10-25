@@ -20,6 +20,7 @@
 - 與 Java、C# 的差異：`u64`、`i64` 用 `bigint`，其餘整數用 `number`，寫入時檢查範圍並拒絕小數；列舉是 `const` 物件加聯集型別（不用 `enum`，開 `erasableSyntaxOnly` 也能編）；欄位用 camelCase，保留字欄位只在建構子參數加底線；`<Name>Protocol` 是物件常數；沒有 `hashCode`，只有 `equals`（浮點數用 `Object.is`）與 `toString`。
 - 錯誤：寫入失敗丟 `RangeError`，資料不足丟 `TruncatedPacketError`，opcode、列舉值未知或長度超過 2^31 - 1 丟 `InvalidPacketError`。字串長度自己算 UTF-8 位元組數，孤立代理字元寫成 U+FFFD；解碼不吃掉開頭的 BOM。
 - 型別名稱和 `Packet`、`Index`、`Uint8Array`、`Error` 這類產生的程式會用到的名稱衝突（不分大小寫）直接報錯。
+- `<Name>Codec` 只在協定有列舉時 import `InvalidPacketError`、`PacketReader`（只有列舉的讀取函式用到），否則 `noUnusedLocals` 編不過。四種語言的往返測試都跑 `test/fixtures/minimal.yaml`（單一 `u8` 欄位，沒有列舉、結構、位元欄位、條件，伺服器方向沒有封包）；另外手動確認過沒有封包、空封包、只有結構、只有位元欄位與條件、列舉只在位元欄位、只有列舉沒有封包等最小協定，Java `-Xlint:all -Werror`、C# `-warnaserror`、C++ `-Wshadow` 都沒有警告。
 - 測試：golden file（`test/golden/typescript/`）、TypeScript 往返測試（用專案的 `tsc` 以嚴格選項編進暫存目錄，含 `noUncheckedIndexedAccess`、`noUnusedLocals`、`verbatimModuleSyntax`、`erasableSyntaxOnly`，再用 Node 執行，逐一編碼再解碼，比對已知位元組，另驗證範圍、截斷與錯誤輸入）；不需要額外工具，所以沒有略過條件。
 
 - C++ 產生器：`pktspec gen cpp`，`--namespace` 指定命名空間（接受 `A::B` 或 `A.B`，預設由協定名稱轉 PascalCase）；C++17，只用標準函式庫，純標頭檔，不需要連結。

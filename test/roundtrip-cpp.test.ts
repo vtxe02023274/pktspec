@@ -16,7 +16,14 @@ import {
   type MemberType,
   type Protocol,
 } from '../src/model.js';
-import { allTypes, bitFields, chatRoom, conditionalFields, presentFields } from './helpers.js';
+import {
+  allTypes,
+  bitFields,
+  chatRoom,
+  conditionalFields,
+  minimal,
+  presentFields,
+} from './helpers.js';
 
 interface Compiler {
   command: string;
@@ -517,6 +524,13 @@ describe.skipIf(!compiler)('C++ round trip', () => {
     expect(lines).toContain('Status 01fffd0fffffffff');
     expect(lines).toContain('Status 0100000400000000');
     expect(lines).toContain('Board 020305ffff00000005ffffffffffff');
+  }, 240_000);
+
+  it('compiles a protocol with nothing but one packet and one field', () => {
+    // No enums, structs, bit fields or conditions, and no packets from the server.
+    const lines = runRoundTrip(minimal());
+    expect(lines).toContain('Ping 01ff');
+    expect(lines).toContain('Ping 0100');
   }, 240_000);
 
   it('writes conditional fields only when their condition holds', () => {
