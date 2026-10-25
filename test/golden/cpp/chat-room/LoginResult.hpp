@@ -26,27 +26,27 @@ struct LoginResult final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a LoginResult starting at the reader's position. */
     static LoginResult readFrom(PacketReader& reader);
 
-    bool operator==(const LoginResult& other) const;
-    bool operator!=(const LoginResult& other) const { return !(*this == other); }
+    bool operator==(const LoginResult& other_) const;
+    bool operator!=(const LoginResult& other_) const { return !(*this == other_); }
 };
 
 inline LoginResult::LoginResult(LoginStatus statusIn, User userIn)
     : status(statusIn), user(std::move(userIn)) {}
 
 inline std::size_t LoginResult::bodySize() const {
-    std::size_t size = 1;
-    size += this->user.encodedSize();
-    return size;
+    std::size_t size_ = 1;
+    size_ += this->user.encodedSize();
+    return size_;
 }
 
-inline void LoginResult::writeTo(PacketWriter& writer) const {
-    writer.writeU8(static_cast<std::uint8_t>(this->status));
-    this->user.writeTo(writer);
+inline void LoginResult::writeTo(PacketWriter& writer_) const {
+    writer_.writeU8(static_cast<std::uint8_t>(this->status));
+    this->user.writeTo(writer_);
 }
 
 inline LoginResult LoginResult::readFrom(PacketReader& reader) {
@@ -56,9 +56,9 @@ inline LoginResult LoginResult::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool LoginResult::operator==(const LoginResult& other) const {
-    return this->status == other.status
-        && this->user == other.user;
+inline bool LoginResult::operator==(const LoginResult& other_) const {
+    return this->status == other_.status
+        && this->user == other_.user;
 }
 
 }  // namespace ChatRoom

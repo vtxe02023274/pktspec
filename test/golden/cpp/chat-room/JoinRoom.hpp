@@ -25,27 +25,27 @@ struct JoinRoom final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a JoinRoom starting at the reader's position. */
     static JoinRoom readFrom(PacketReader& reader);
 
-    bool operator==(const JoinRoom& other) const;
-    bool operator!=(const JoinRoom& other) const { return !(*this == other); }
+    bool operator==(const JoinRoom& other_) const;
+    bool operator!=(const JoinRoom& other_) const { return !(*this == other_); }
 };
 
 inline JoinRoom::JoinRoom(std::uint32_t roomIdIn, std::string passwordIn)
     : roomId(roomIdIn), password(std::move(passwordIn)) {}
 
 inline std::size_t JoinRoom::bodySize() const {
-    std::size_t size = 4;
-    size += 1 + this->password.size();
-    return size;
+    std::size_t size_ = 4;
+    size_ += 1 + this->password.size();
+    return size_;
 }
 
-inline void JoinRoom::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
-    writer.writeString(this->password, 1);
+inline void JoinRoom::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
+    writer_.writeString(this->password, 1);
 }
 
 inline JoinRoom JoinRoom::readFrom(PacketReader& reader) {
@@ -55,9 +55,9 @@ inline JoinRoom JoinRoom::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool JoinRoom::operator==(const JoinRoom& other) const {
-    return this->roomId == other.roomId
-        && this->password == other.password;
+inline bool JoinRoom::operator==(const JoinRoom& other_) const {
+    return this->roomId == other_.roomId
+        && this->password == other_.password;
 }
 
 }  // namespace ChatRoom

@@ -21,13 +21,13 @@ struct LeaveRoom final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a LeaveRoom starting at the reader's position. */
     static LeaveRoom readFrom(PacketReader& reader);
 
-    bool operator==(const LeaveRoom& other) const;
-    bool operator!=(const LeaveRoom& other) const { return !(*this == other); }
+    bool operator==(const LeaveRoom& other_) const;
+    bool operator!=(const LeaveRoom& other_) const { return !(*this == other_); }
 };
 
 inline LeaveRoom::LeaveRoom(std::uint32_t roomIdIn)
@@ -37,8 +37,8 @@ inline std::size_t LeaveRoom::bodySize() const {
     return 4;
 }
 
-inline void LeaveRoom::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
+inline void LeaveRoom::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
 }
 
 inline LeaveRoom LeaveRoom::readFrom(PacketReader& reader) {
@@ -47,8 +47,8 @@ inline LeaveRoom LeaveRoom::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool LeaveRoom::operator==(const LeaveRoom& other) const {
-    return this->roomId == other.roomId;
+inline bool LeaveRoom::operator==(const LeaveRoom& other_) const {
+    return this->roomId == other_.roomId;
 }
 
 }  // namespace ChatRoom

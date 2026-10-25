@@ -162,6 +162,9 @@ function bitFieldChecks(): string[] {
     `throwsIllegal(() -> ${status('(short) 128', '0L')}.encode(), "level too large");`,
     `throwsIllegal(() -> ${status('(short) -1', '0L')}.encode(), "level negative");`,
     `throwsIllegal(() -> ${status('(short) 0', '0x80000000L')}.encode(), "low too large");`,
+    // All 32 bits in use: the check must not stop at the width, or -1 would pass as 0xFFFFFFFF.
+    'throwsIllegal(() -> new Board(new java.util.ArrayList<>(), -1L).encode(), "everything negative");',
+    'throwsIllegal(() -> new Board(new java.util.ArrayList<>(), 0x100000000L).encode(), "everything too large");',
     'throwsIllegal(() -> BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 0, 0, 0, 0, 0, 0}), "mood 0");',
     'throwsIllegal(() -> BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 6, 4, 0, 0, 0, 0}), "team 3");',
     `expect(${status('(short) 0', '0L')}.equals(BitFieldsProtocol.decodeFromClient(new byte[] {1, 0, 0, (byte) 0x84, 0, 0, 0, 0})), "unused bits");`,

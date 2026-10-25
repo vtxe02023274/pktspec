@@ -29,7 +29,7 @@
 - 位元組順序：逐位元組組合與拆開，浮點數用 `memcpy`，有號數轉換自己拆開寫，不靠實作定義的行為。
 - 錯誤都繼承 `std::runtime_error`：`PacketError` 為基底；`TruncatedPacketError`、`InvalidPacketError`（長度超過 2^31 - 1；子類別 `UnknownOpcodeError`、`UnknownEnumValueError`）、`PacketRangeError`（寫入時長度前綴放不下）。需要開啟例外。
 - 型別名稱和產生的名稱（`Packet`、`Structs` 等）或 `NULL`、`ERROR` 這類常被定義成巨集的名稱衝突（不分大小寫）直接報錯。文件註解用區塊註解並且只輸出 ASCII（非 ASCII 寫成 `\uXXXX`），避免行尾反斜線接行和 MSVC 的原始碼字碼頁問題。
-- 測試：golden file（`test/golden/cpp/`）、`test/cpp.test.ts`、`test/roundtrip-cpp.test.ts`（用 `g++`／`clang++`／`cl`，或 `CXX` 指定，以 `-std=c++17 -Wall -Wextra -Werror -pedantic` 編譯產生的標頭加產生的測試程式再執行：每個封包的極端值編碼再解碼、比對已知位元組、每個長度的截斷、錯誤輸入與寫入範圍的例外，另有結構互相包含與關鍵字欄位名稱的協定）；沒有編譯器時略過，`PKTSPEC_REQUIRE_CPP` 設定時改為失敗。也用 MSVC `/W4 /WX` 與 g++ 的 `-Wshadow -Wconversion -std=c++20` 手動確認過。
+- 測試：golden file（`test/golden/cpp/`）、`test/cpp.test.ts`、`test/roundtrip-cpp.test.ts`（用 `g++`／`clang++`／`cl`，或 `CXX` 指定，以 `-std=c++17 -Wall -Wextra -Werror -pedantic -Wshadow` 編譯產生的標頭加產生的測試程式再執行：每個封包的極端值編碼再解碼、比對已知位元組、每個長度的截斷、錯誤輸入與寫入範圍的例外，另有結構互相包含、關鍵字欄位名稱、和產生的區域變數同名的欄位的協定）；沒有編譯器時略過，`PKTSPEC_REQUIRE_CPP` 設定時改為失敗。也用 MSVC `/W4 /WX` 與 g++ 的 `-Wshadow -Wconversion -std=c++20` 手動確認過。產生的函式裡的區域變數與參數（`size_`、`item_`、`writer_`、`other_`、`<名稱>Bits_`、`<名稱>Present_`、`<名稱>Count_`）一律以底線結尾：成員只有和關鍵字或保留名稱衝突時才會補底線，所以欄位叫 `size`、`flags_bits` 也不會被遮蔽。
 
 - `pktspec diff old.yaml new.yaml`：比對兩份定義，依 breaking／compatible／info 分組，`--format json` 給程式讀；兩個檔案都先過 `check` 的檢查，錯誤一起列出。`compile` 多回傳 `locations`（宣告位置），`src/diff.ts` 用它標行號。
 - diff 規則依線上格式（opcode 加依序欄位，無名稱）：欄位新增、移除、型別或長度前綴改變、列舉底層型別改變、值移除或改號一律 breaking；改名、doc、version 是 info；新封包、新列舉值是 compatible。結構、列舉的變更列出經過的封包，沒有封包用到時降為 info。
@@ -53,11 +53,11 @@
 - 選語法時把群組當成一個有名稱的欄位，而不是讓子欄位直接平鋪在 `fields`：底層整數的寬度、未使用的位元、文件與 Wireshark 的父節點、`diff` 的比對單位都需要一個名字。群組名稱和子欄位、同層欄位共用命名空間（`check` 一起比對 camelCase 後的名稱），產生的程式碼裡不出現群組名稱。
 - `check`：位元數至少 1、`bool` 只能 1 位元、總和不超過底層寬度、列舉的每個值都要在 0 到 2^bits - 1（所以負值列舉不能放）、子欄位型別只能是 `bool` 或列舉、底層型別只能是 `u8`／`u16`／`u32`、不能和 `length`／`size` 一起用、不能是陣列。列舉先於結構與封包解析，所以子欄位能檢查列舉值。
 - 成員型別：無號子欄位用放得下的最小無號型別（≤8 位元當 `u8`、≤16 當 `u16`、其餘 `u32`），所以 Java 的 7 位元是 `short`、C# 是 `byte`。各語言都用一個區域變數組合整數再寫出：Java `long`、C# `uint`、C++ `std::uint32_t`、TypeScript `number`（位元運算是有號 32 位元，`u32` 寫出前 `>>> 0`，讀取時碰到第 31 位元的子欄位不再做遮罩）。
-- 範圍錯誤：各語言的 codec 多一個 `checkBits`，只在協定有位元欄位時產生（沒有位元欄位的協定 golden 不變）：Java 丟 `IllegalArgumentException`、C# `ArgumentException`、TypeScript `RangeError`、C++ `PacketRangeError`。C# 與 C++ 列舉可以強制轉型成任意值，所以列舉子欄位也過一次檢查（負值轉成無號後必定超出）；TypeScript 同理；Java 列舉值在 `check` 已保證放得下，但為了統一也走 `checkBits`。
+- 範圍錯誤：各語言的 codec 多一個 `checkBits`，只在協定有位元欄位時產生（沒有位元欄位的協定 golden 不變）：Java 丟 `IllegalArgumentException`、C# `ArgumentException`、TypeScript `RangeError`、C++ `PacketRangeError`。C# 與 C++ 列舉可以強制轉型成任意值，所以列舉子欄位也過一次檢查：C# 負值轉成無號後必定超出，C++ 的 `checkBits` 收 `std::int64_t` 並直接拒絕負值（子欄位佔滿 32 位元時轉成無號不會超出）；TypeScript 同理；Java 列舉值在 `check` 已保證放得下，但為了統一也走 `checkBits`。
 - 解碼列舉子欄位：Java 沿用 `fromValue`；TypeScript、C#、C++ 為位元欄位用到的列舉多產生 `bitsTo<Enum>`（吃數值而不是讀取器），錯誤類別與一般列舉欄位相同。
 - Wireshark：群組是十六進位的整數欄位，子欄位是同寬度、帶遮罩的 `ProtoField`（`bool` 用 `ProtoField.bool` 加位元寬度），名稱和一般欄位一樣是 `協定.封包.子欄位`。列舉值的檢查在 Lua 端用 `math.floor(raw / div) % mod`，不依賴 `bit32` 或 5.3 的位元運算子。執行期的 `bits` 分支同樣只在用到時產生。
 - 文件：欄位表的型別寫 `u16 bit fields`，表後另有一張位元範圍表（`1–2` 這種寫法，包含未使用的位元範圍）。
-- `diff`：子欄位先依名稱配對，再依位置配對改名。位元數改變（`bit-field-resized`）、位置改變含順序（`bit-field-moved`）、型別改變（`bit-field-type-changed`）、移除（`bit-field-removed`）都是 breaking；改名、doc 是 info。新增子欄位：落在舊版未使用的高位元是 compatible，理由是舊版寫入時那些位元必定是 0、讀取時忽略，新版讀舊資料得到 0，雙方都不會失敗；例外是沒有 0 值的列舉，新版讀舊資料會丟錯，算 breaking；佔到舊版已用位元的也是 breaking。移除不對稱地算 breaking：舊版的程式還在讀那幾個位元，卻只會收到 0，語意被默默改掉。只被位元欄位用到的列舉，底層型別改變不影響線上格式，降為 info。
+- `diff`：同位置、同底層整數的位元欄位群組算改名，子欄位另外比對（群組改名同時新增子欄位是一筆 info 加一筆 compatible，而不是移除加新增）。子欄位先依名稱配對，再依位置配對改名。位元數改變（`bit-field-resized`）、位置改變含順序（`bit-field-moved`）、型別改變（`bit-field-type-changed`）、移除（`bit-field-removed`）都是 breaking；改名、doc 是 info。新增子欄位：落在舊版未使用的高位元是 compatible，理由是舊版寫入時那些位元必定是 0、讀取時忽略，新版讀舊資料得到 0，雙方都不會失敗；例外是沒有 0 值的列舉，新版讀舊資料會丟錯，算 breaking；佔到舊版已用位元的也是 breaking。移除不對稱地算 breaking：舊版的程式還在讀那幾個位元，卻只會收到 0，語意被默默改掉。只被位元欄位用到的列舉，底層型別改變不影響線上格式，降為 info。
 - `fuzz`：有效樣本逐一把子欄位換成最大值（`bool` 為 true、列舉每個值），0 由 `zero` 樣本涵蓋；未使用的位元一律為 0（解碼會忽略、重新編碼寫 0，非 0 的樣本既不是有效也不會丟錯，所以不產生）。無效樣本 `unknown_enum` 多了列舉子欄位：在位元數放得下的範圍內取沒有成員使用的最大與最小值，放不下任何未使用值時不產生。
 - 測試：`test/fixtures/bit-fields.yaml`（三種寬度、沒有 0 值且底層為 `i16` 的列舉、佔滿 32 位元、第 31 位元、結構裡的位元欄位與結構陣列）；`compile.test.ts` 的錯誤訊息；各產生器 golden；Java、C#、TypeScript、C++ 往返（已知位元組、超出位元數的範圍錯誤、未知列舉值、未使用位元被忽略）；Wireshark 用 tshark 比對遮罩欄位、列舉專家資訊與截斷；fuzz 單元測試與四種解碼器的語料交叉驗證；`diff.test.ts` 每條規則。另外手動用 g++ `-std=c++20 -Wshadow -Wconversion -Wsign-conversion` 與 MSVC `/W4 /WX` 編譯過產生的標頭。
 
@@ -70,7 +70,7 @@
 - 結構可以經由條件陣列遞迴（`Node` 的 `children` 是 `std::optional<std::vector<Node>>`），g++、MSVC 都能編。
 - Wireshark：被測的欄位在欄位表多 `key`（有號數加 `signed`），位元欄位群組有被測的子欄位時加 `keys` 並在子欄位上記 `key`、`div`、`mod`；條件欄位有 `cond = { f, v }`。執行期的 `dissect_fields` 在協定有條件欄位時換成會記值的版本，每個結構或封包一張值表；64 位元的值用 `Int64:tonumber()`，比對範圍見上。
 - 文件：有條件欄位的表格多一欄 `Present when`，整份文件開頭多一句說明；大小欄寫條件成立時的大小，封包總大小因此變成 `N+`。
-- `diff`：加上（`condition-added`）、移除（`condition-removed`）、改變（`condition-changed`）條件都是 breaking，因為雙方對這幾個位元組在不在線上的判斷不同。比對時被測欄位依名稱或位置對應、值依集合比較，所以被測欄位改名、列舉成員改名、`in` 換順序都不算改變。結構的線上簽章也帶條件（被測成員的位置加值），改條件的結構會影響改名與排列判斷。新增條件欄位一般是 breaking（條件成立時後面的位元組位移）；例外是條件只比對舊版沒有定義的列舉值，而且被測欄位在舊版已是同一個列舉：舊版不會送出這些值、舊資料也不會讓條件成立，和新增列舉值同一個理由算 compatible。移除條件欄位一律 breaking，舊版在條件成立時還會讀那幾個位元組。
+- `diff`：加上（`condition-added`）、移除（`condition-removed`）、改變（`condition-changed`）條件都是 breaking，因為雙方對這幾個位元組在不在線上的判斷不同。比對時被測欄位沿用欄位的配對（依名稱，再依位置與型別認改名；子欄位再依群組內的配對），值依集合比較，所以被測欄位改名、前面的位元欄位群組多了子欄位、列舉成員改名、`in` 換順序都不算改變；不用攤平後的成員序號，因為群組多一個子欄位會讓後面的序號全部位移。結構的線上簽章也帶條件（被測成員所在欄位的位置，子欄位再加群組內的位置，加上值），改條件的結構會影響改名與排列判斷。新增條件欄位一般是 breaking（條件成立時後面的位元組位移）；例外是條件只比對舊版沒有定義的列舉值，而且被測欄位在舊版已是同一個列舉：舊版不會送出這些值、舊資料也不會讓條件成立，和新增列舉值同一個理由算 compatible。移除條件欄位一律 breaking，舊版在條件成立時還會讀那幾個位元組。
 - `fuzz`：欄位串列改成依條件組合（`place()`），被測的值從已編好的位元組讀回，不需要另外帶值；整包樣本、巢狀結構、隨機樣本都照條件決定欄位在不在，條件不成立的欄位不消耗亂數。逐一換邊界值時，條件欄位先把被測欄位設成符合的第一個值（被測欄位也有條件就一路往前設），所以條件欄位的每個邊界值、列舉的未知值、長度前綴都涵蓋得到；另外加 `present`（條件成立、欄位為 0）與 `absent`（被測欄位換成不符合的值）兩個樣本，和既有樣本位元組相同的照常去重。無效樣本多一種 `truncated`：封包層的條件欄位在條件成立時，從該欄位開始整個截掉（`missing-<欄位>`）。沒有條件欄位的協定，語料與之前逐位元組相同（用舊版 `fuzz.ts` 比對過三個既有 fixture 與兩組選項）。
 - 測試：`test/fixtures/conditional-fields.yaml`（列舉的 `equals`／`in`、`bool`、位元欄位的 `bool`、無號與列舉子欄位、有條件的位元欄位群組、測條件欄位的條件、負數與 `u64` 的值、條件陣列、固定長度陣列、經由條件陣列遞迴的結構）；`compile.test.ts` 的解析結果與錯誤訊息；各產生器 golden（既有的 golden 沒有變動）；Java、C#、TypeScript、C++ 往返（極端值的兩種排列、已知位元組、條件成立卻沒值、條件不成立卻有值、位元欄位群組只給一半、解碼後保持空值）；Wireshark 用 tshark 比對欄位有無、串連的條件、64 位元條件的邊界值與多餘位元組；fuzz 單元測試與四種解碼器的語料交叉驗證；`diff.test.ts` 每條規則。另外手動用 g++ `-std=c++20 -Wshadow -Wconversion -Wsign-conversion` 與 MSVC `/W4 /WX` 編譯過產生的標頭。
 
@@ -85,7 +85,7 @@
 - 字串陣列的元素一律用 u16 長度前綴。
 - 結構只能透過長度前綴陣列遞迴。
 - TypeScript 的 `f32`、`f64` 寫出 NaN 時一律是標準 NaN，不保留原本的位元內容。
-- `diff` 不偵測結構、列舉改名（視為移除加新增）；欄位改名只認同位置、同型別的情況；列舉值新增算相容，但產生的程式遇到未知值會丟錯。
+- `diff` 不偵測結構、列舉改名（視為移除加新增）；欄位改名只認同位置、同型別的情況（位元欄位群組只看底層整數）；列舉值新增算相容，但產生的程式遇到未知值會丟錯。
 
 - C++：沒有 `hashCode`、`toString`；例外關閉的環境（Unreal 預設）不能用；`PacketReader` 不擁有緩衝區，緩衝區要比它活得久；長度為 0 位元組的結構組成的長陣列（例如 `Empty[]` 宣告 2^31 - 1 個）會讓解碼迴圈跑很久，其他語言一樣。
 - Wireshark：不重組 TCP；長度前綴的 u32 超過封包長度一律標成長度錯誤；沒有 `bytes` 陣列所以也不處理。

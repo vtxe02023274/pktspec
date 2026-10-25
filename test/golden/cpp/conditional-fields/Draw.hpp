@@ -48,13 +48,13 @@ struct Draw final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Draw starting at the reader's position. */
     static Draw readFrom(PacketReader& reader);
 
-    bool operator==(const Draw& other) const;
-    bool operator!=(const Draw& other) const { return !(*this == other); }
+    bool operator==(const Draw& other_) const;
+    bool operator!=(const Draw& other_) const { return !(*this == other_); }
 };
 
 inline Draw::Draw(
@@ -80,85 +80,85 @@ inline Draw::Draw(
       label(std::move(labelIn)) {}
 
 inline std::size_t Draw::bodySize() const {
-    std::size_t size = 1;
+    std::size_t size_ = 1;
     if (this->radius.has_value()) {
-        size += 4;
+        size_ += 4;
     }
     if (this->corner.has_value()) {
-        size += 4;
+        size_ += 4;
     }
     if (this->points.has_value()) {
-        size += 1;
-        size += (*this->points).size() * 4;
+        size_ += 1;
+        size_ += (*this->points).size() * 4;
     }
     if (this->closed.has_value()) {
-        size += 1;
+        size_ += 1;
     }
     if (this->fill.has_value()) {
-        size += 4;
+        size_ += 4;
     }
     if (this->dashed.has_value()) {
-        size += 1;
+        size_ += 1;
     }
     if (this->dash.has_value()) {
-        size += 2;
+        size_ += 2;
     }
     if (this->label.has_value()) {
-        size += 1 + (*this->label).size();
+        size_ += 1 + (*this->label).size();
     }
-    return size;
+    return size_;
 }
 
-inline void Draw::writeTo(PacketWriter& writer) const {
-    writer.writeU8(static_cast<std::uint8_t>(this->shape));
-    const bool radiusPresent = this->shape == Shape::Circle;
-    detail::checkPresent(this->radius, radiusPresent, "radius");
-    if (radiusPresent) {
-        writer.writeF32(*this->radius);
+inline void Draw::writeTo(PacketWriter& writer_) const {
+    writer_.writeU8(static_cast<std::uint8_t>(this->shape));
+    const bool radiusPresent_ = this->shape == Shape::Circle;
+    detail::checkPresent(this->radius, radiusPresent_, "radius");
+    if (radiusPresent_) {
+        writer_.writeF32(*this->radius);
     }
-    const bool cornerPresent = this->shape == Shape::Rect || this->shape == Shape::Polygon;
-    detail::checkPresent(this->corner, cornerPresent, "corner");
-    if (cornerPresent) {
-        (*this->corner).writeTo(writer);
+    const bool cornerPresent_ = this->shape == Shape::Rect || this->shape == Shape::Polygon;
+    detail::checkPresent(this->corner, cornerPresent_, "corner");
+    if (cornerPresent_) {
+        (*this->corner).writeTo(writer_);
     }
-    const bool pointsPresent = this->shape == Shape::Polygon;
-    detail::checkPresent(this->points, pointsPresent, "points");
-    if (pointsPresent) {
-        writer.writeLength((*this->points).size(), 1);
-        for (const auto& item : (*this->points)) {
-            item.writeTo(writer);
+    const bool pointsPresent_ = this->shape == Shape::Polygon;
+    detail::checkPresent(this->points, pointsPresent_, "points");
+    if (pointsPresent_) {
+        writer_.writeLength((*this->points).size(), 1);
+        for (const auto& item_ : (*this->points)) {
+            item_.writeTo(writer_);
         }
     }
-    const bool closedPresent = this->shape == Shape::Polygon;
-    detail::checkPresent(this->closed, closedPresent, "closed");
-    if (closedPresent) {
-        writer.writeBool(*this->closed);
+    const bool closedPresent_ = this->shape == Shape::Polygon;
+    detail::checkPresent(this->closed, closedPresent_, "closed");
+    if (closedPresent_) {
+        writer_.writeBool(*this->closed);
     }
-    const bool fillPresent = this->closed == true;
-    detail::checkPresent(this->fill, fillPresent, "fill");
-    if (fillPresent) {
-        writer.writeU32(*this->fill);
+    const bool fillPresent_ = this->closed == true;
+    detail::checkPresent(this->fill, fillPresent_, "fill");
+    if (fillPresent_) {
+        writer_.writeU32(*this->fill);
     }
-    const bool stylePresent = this->closed == true;
-    detail::checkPresent(this->dashed, stylePresent, "dashed");
-    detail::checkPresent(this->width, stylePresent, "width");
-    if (stylePresent) {
-        std::uint32_t styleBits = 0;
-        styleBits |= *this->dashed ? 1u : 0u;
-        styleBits |= detail::checkBits(*this->width, 4, "width") << 1;
-        writer.writeU8(static_cast<std::uint8_t>(styleBits));
+    const bool stylePresent_ = this->closed == true;
+    detail::checkPresent(this->dashed, stylePresent_, "dashed");
+    detail::checkPresent(this->width, stylePresent_, "width");
+    if (stylePresent_) {
+        std::uint32_t styleBits_ = 0;
+        styleBits_ |= *this->dashed ? 1u : 0u;
+        styleBits_ |= detail::checkBits(*this->width, 4, "width") << 1;
+        writer_.writeU8(static_cast<std::uint8_t>(styleBits_));
     }
-    const bool dashPresent = this->dashed == true;
-    detail::checkPresent(this->dash, dashPresent, "dash");
-    if (dashPresent) {
-        for (const auto& item : (*this->dash)) {
-            writer.writeU8(item);
+    const bool dashPresent_ = this->dashed == true;
+    detail::checkPresent(this->dash, dashPresent_, "dash");
+    if (dashPresent_) {
+        for (const auto& item_ : (*this->dash)) {
+            writer_.writeU8(item_);
         }
     }
-    const bool labelPresent = this->width == 0 || this->width == 15;
-    detail::checkPresent(this->label, labelPresent, "label");
-    if (labelPresent) {
-        writer.writeString((*this->label), 1);
+    const bool labelPresent_ = this->width == 0 || this->width == 15;
+    detail::checkPresent(this->label, labelPresent_, "label");
+    if (labelPresent_) {
+        writer_.writeString((*this->label), 1);
     }
 }
 
@@ -172,10 +172,10 @@ inline Draw Draw::readFrom(PacketReader& reader) {
         result.corner = Point::readFrom(reader);
     }
     if (result.shape == Shape::Polygon) {
-        const std::size_t pointsCount = reader.readLength(1);
+        const std::size_t pointsCount_ = reader.readLength(1);
         result.points.emplace();
-        reader.reserveFor((*result.points), pointsCount);
-        for (std::size_t i = 0; i < pointsCount; ++i) {
+        reader.reserveFor((*result.points), pointsCount_);
+        for (std::size_t i = 0; i < pointsCount_; ++i) {
             (*result.points).push_back(Point::readFrom(reader));
         }
     }
@@ -186,14 +186,14 @@ inline Draw Draw::readFrom(PacketReader& reader) {
         result.fill = reader.readU32();
     }
     if (result.closed == true) {
-        const std::uint32_t styleBits = reader.readU8();
-        result.dashed = (styleBits & 0x01u) != 0;
-        result.width = static_cast<std::uint8_t>((styleBits >> 1) & 0x0Fu);
+        const std::uint32_t styleBits_ = reader.readU8();
+        result.dashed = (styleBits_ & 0x01u) != 0;
+        result.width = static_cast<std::uint8_t>((styleBits_ >> 1) & 0x0Fu);
     }
     if (result.dashed == true) {
         result.dash.emplace();
-        for (auto& item : (*result.dash)) {
-            item = reader.readU8();
+        for (auto& item_ : (*result.dash)) {
+            item_ = reader.readU8();
         }
     }
     if (result.width == 0 || result.width == 15) {
@@ -202,17 +202,17 @@ inline Draw Draw::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Draw::operator==(const Draw& other) const {
-    return this->shape == other.shape
-        && detail::same(this->radius, other.radius)
-        && this->corner == other.corner
-        && detail::same(this->points, other.points)
-        && this->closed == other.closed
-        && this->fill == other.fill
-        && this->dashed == other.dashed
-        && this->width == other.width
-        && detail::same(this->dash, other.dash)
-        && this->label == other.label;
+inline bool Draw::operator==(const Draw& other_) const {
+    return this->shape == other_.shape
+        && detail::same(this->radius, other_.radius)
+        && this->corner == other_.corner
+        && detail::same(this->points, other_.points)
+        && this->closed == other_.closed
+        && this->fill == other_.fill
+        && this->dashed == other_.dashed
+        && this->width == other_.width
+        && detail::same(this->dash, other_.dash)
+        && this->label == other_.label;
 }
 
 }  // namespace ConditionalFields

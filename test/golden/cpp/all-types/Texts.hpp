@@ -38,13 +38,13 @@ struct Texts final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Texts starting at the reader's position. */
     static Texts readFrom(PacketReader& reader);
 
-    bool operator==(const Texts& other) const;
-    bool operator!=(const Texts& other) const { return !(*this == other); }
+    bool operator==(const Texts& other_) const;
+    bool operator!=(const Texts& other_) const { return !(*this == other_); }
 };
 
 inline Texts::Texts(
@@ -60,20 +60,20 @@ inline Texts::Texts(
       hash(std::move(hashIn)) {}
 
 inline std::size_t Texts::bodySize() const {
-    std::size_t size = 4;
-    size += 1 + this->shortText.size();
-    size += 2 + this->text.size();
-    size += 4 + this->longText.size();
-    size += 4 + this->blob.size();
-    return size;
+    std::size_t size_ = 4;
+    size_ += 1 + this->shortText.size();
+    size_ += 2 + this->text.size();
+    size_ += 4 + this->longText.size();
+    size_ += 4 + this->blob.size();
+    return size_;
 }
 
-inline void Texts::writeTo(PacketWriter& writer) const {
-    writer.writeString(this->shortText, 1);
-    writer.writeString(this->text, 2);
-    writer.writeString(this->longText, 4);
-    writer.writeBytes(this->blob, 4);
-    writer.writeFixedBytes(this->hash);
+inline void Texts::writeTo(PacketWriter& writer_) const {
+    writer_.writeString(this->shortText, 1);
+    writer_.writeString(this->text, 2);
+    writer_.writeString(this->longText, 4);
+    writer_.writeBytes(this->blob, 4);
+    writer_.writeFixedBytes(this->hash);
 }
 
 inline Texts Texts::readFrom(PacketReader& reader) {
@@ -86,12 +86,12 @@ inline Texts Texts::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Texts::operator==(const Texts& other) const {
-    return this->shortText == other.shortText
-        && this->text == other.text
-        && this->longText == other.longText
-        && this->blob == other.blob
-        && this->hash == other.hash;
+inline bool Texts::operator==(const Texts& other_) const {
+    return this->shortText == other_.shortText
+        && this->text == other_.text
+        && this->longText == other_.longText
+        && this->blob == other_.blob
+        && this->hash == other_.hash;
 }
 
 }  // namespace AllTypes

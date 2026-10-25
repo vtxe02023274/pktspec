@@ -24,27 +24,27 @@ struct Say final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Say starting at the reader's position. */
     static Say readFrom(PacketReader& reader);
 
-    bool operator==(const Say& other) const;
-    bool operator!=(const Say& other) const { return !(*this == other); }
+    bool operator==(const Say& other_) const;
+    bool operator!=(const Say& other_) const { return !(*this == other_); }
 };
 
 inline Say::Say(std::uint32_t roomIdIn, std::string textIn)
     : roomId(roomIdIn), text(std::move(textIn)) {}
 
 inline std::size_t Say::bodySize() const {
-    std::size_t size = 4;
-    size += 2 + this->text.size();
-    return size;
+    std::size_t size_ = 4;
+    size_ += 2 + this->text.size();
+    return size_;
 }
 
-inline void Say::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
-    writer.writeString(this->text, 2);
+inline void Say::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
+    writer_.writeString(this->text, 2);
 }
 
 inline Say Say::readFrom(PacketReader& reader) {
@@ -54,9 +54,9 @@ inline Say Say::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Say::operator==(const Say& other) const {
-    return this->roomId == other.roomId
-        && this->text == other.text;
+inline bool Say::operator==(const Say& other_) const {
+    return this->roomId == other_.roomId
+        && this->text == other_.text;
 }
 
 }  // namespace ChatRoom

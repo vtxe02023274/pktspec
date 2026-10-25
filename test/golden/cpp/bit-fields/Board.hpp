@@ -25,49 +25,49 @@ struct Board final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Board starting at the reader's position. */
     static Board readFrom(PacketReader& reader);
 
-    bool operator==(const Board& other) const;
-    bool operator!=(const Board& other) const { return !(*this == other); }
+    bool operator==(const Board& other_) const;
+    bool operator!=(const Board& other_) const { return !(*this == other_); }
 };
 
 inline Board::Board(std::vector<Cell> cellsIn, std::uint32_t everythingIn)
     : cells(std::move(cellsIn)), everything(everythingIn) {}
 
 inline std::size_t Board::bodySize() const {
-    std::size_t size = 5;
-    size += this->cells.size() * 3;
-    return size;
+    std::size_t size_ = 5;
+    size_ += this->cells.size() * 3;
+    return size_;
 }
 
-inline void Board::writeTo(PacketWriter& writer) const {
-    writer.writeLength(this->cells.size(), 1);
-    for (const auto& item : this->cells) {
-        item.writeTo(writer);
+inline void Board::writeTo(PacketWriter& writer_) const {
+    writer_.writeLength(this->cells.size(), 1);
+    for (const auto& item_ : this->cells) {
+        item_.writeTo(writer_);
     }
-    std::uint32_t fullBits = 0;
-    fullBits |= detail::checkBits(this->everything, 32, "everything");
-    writer.writeU32(fullBits);
+    std::uint32_t fullBits_ = 0;
+    fullBits_ |= detail::checkBits(this->everything, 32, "everything");
+    writer_.writeU32(fullBits_);
 }
 
 inline Board Board::readFrom(PacketReader& reader) {
     Board result;
-    const std::size_t cellsCount = reader.readLength(1);
-    reader.reserveFor(result.cells, cellsCount);
-    for (std::size_t i = 0; i < cellsCount; ++i) {
+    const std::size_t cellsCount_ = reader.readLength(1);
+    reader.reserveFor(result.cells, cellsCount_);
+    for (std::size_t i = 0; i < cellsCount_; ++i) {
         result.cells.push_back(Cell::readFrom(reader));
     }
-    const std::uint32_t fullBits = reader.readU32();
-    result.everything = fullBits & 0xFFFFFFFFu;
+    const std::uint32_t fullBits_ = reader.readU32();
+    result.everything = fullBits_ & 0xFFFFFFFFu;
     return result;
 }
 
-inline bool Board::operator==(const Board& other) const {
-    return detail::same(this->cells, other.cells)
-        && this->everything == other.everything;
+inline bool Board::operator==(const Board& other_) const {
+    return detail::same(this->cells, other_.cells)
+        && this->everything == other_.everything;
 }
 
 }  // namespace BitFields

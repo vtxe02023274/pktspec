@@ -26,13 +26,13 @@ struct Point {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Point starting at the reader's position. */
     static Point readFrom(PacketReader& reader);
 
-    bool operator==(const Point& other) const;
-    bool operator!=(const Point& other) const { return !(*this == other); }
+    bool operator==(const Point& other_) const;
+    bool operator!=(const Point& other_) const { return !(*this == other_); }
 };
 
 /** Recursion is allowed through prefixed arrays. */
@@ -47,13 +47,13 @@ struct Node {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Node starting at the reader's position. */
     static Node readFrom(PacketReader& reader);
 
-    bool operator==(const Node& other) const;
-    bool operator!=(const Node& other) const { return !(*this == other); }
+    bool operator==(const Node& other_) const;
+    bool operator!=(const Node& other_) const { return !(*this == other_); }
 };
 
 struct Empty {
@@ -63,13 +63,13 @@ struct Empty {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Empty starting at the reader's position. */
     static Empty readFrom(PacketReader& reader);
 
-    bool operator==(const Empty& other) const;
-    bool operator!=(const Empty& other) const { return !(*this == other); }
+    bool operator==(const Empty& other_) const;
+    bool operator!=(const Empty& other_) const { return !(*this == other_); }
 };
 
 inline Point::Point(std::int16_t xIn, std::int16_t yIn)
@@ -79,9 +79,9 @@ inline std::size_t Point::encodedSize() const {
     return 4;
 }
 
-inline void Point::writeTo(PacketWriter& writer) const {
-    writer.writeI16(this->x);
-    writer.writeI16(this->y);
+inline void Point::writeTo(PacketWriter& writer_) const {
+    writer_.writeI16(this->x);
+    writer_.writeI16(this->y);
 }
 
 inline Point Point::readFrom(PacketReader& reader) {
@@ -91,45 +91,45 @@ inline Point Point::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Point::operator==(const Point& other) const {
-    return this->x == other.x
-        && this->y == other.y;
+inline bool Point::operator==(const Point& other_) const {
+    return this->x == other_.x
+        && this->y == other_.y;
 }
 
 inline Node::Node(std::string labelIn, std::vector<Node> childrenIn)
     : label(std::move(labelIn)), children(std::move(childrenIn)) {}
 
 inline std::size_t Node::encodedSize() const {
-    std::size_t size = 1;
-    size += 1 + this->label.size();
-    for (const auto& item : this->children) {
-        size += item.encodedSize();
+    std::size_t size_ = 1;
+    size_ += 1 + this->label.size();
+    for (const auto& item_ : this->children) {
+        size_ += item_.encodedSize();
     }
-    return size;
+    return size_;
 }
 
-inline void Node::writeTo(PacketWriter& writer) const {
-    writer.writeString(this->label, 1);
-    writer.writeLength(this->children.size(), 1);
-    for (const auto& item : this->children) {
-        item.writeTo(writer);
+inline void Node::writeTo(PacketWriter& writer_) const {
+    writer_.writeString(this->label, 1);
+    writer_.writeLength(this->children.size(), 1);
+    for (const auto& item_ : this->children) {
+        item_.writeTo(writer_);
     }
 }
 
 inline Node Node::readFrom(PacketReader& reader) {
     Node result;
     result.label = reader.readString(1);
-    const std::size_t childrenCount = reader.readLength(1);
-    reader.reserveFor(result.children, childrenCount);
-    for (std::size_t i = 0; i < childrenCount; ++i) {
+    const std::size_t childrenCount_ = reader.readLength(1);
+    reader.reserveFor(result.children, childrenCount_);
+    for (std::size_t i = 0; i < childrenCount_; ++i) {
         result.children.push_back(Node::readFrom(reader));
     }
     return result;
 }
 
-inline bool Node::operator==(const Node& other) const {
-    return this->label == other.label
-        && detail::same(this->children, other.children);
+inline bool Node::operator==(const Node& other_) const {
+    return this->label == other_.label
+        && detail::same(this->children, other_.children);
 }
 
 inline std::size_t Empty::encodedSize() const {

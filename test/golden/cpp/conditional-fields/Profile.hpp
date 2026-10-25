@@ -48,13 +48,13 @@ struct Profile final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Profile starting at the reader's position. */
     static Profile readFrom(PacketReader& reader);
 
-    bool operator==(const Profile& other) const;
-    bool operator!=(const Profile& other) const { return !(*this == other); }
+    bool operator==(const Profile& other_) const;
+    bool operator!=(const Profile& other_) const { return !(*this == other_); }
 };
 
 inline Profile::Profile(
@@ -82,65 +82,65 @@ inline Profile::Profile(
       tree(std::move(treeIn)) {}
 
 inline std::size_t Profile::bodySize() const {
-    std::size_t size = 11;
+    std::size_t size_ = 11;
     if (this->bonus.has_value()) {
-        size += 8;
+        size_ += 8;
     }
     if (this->guild.has_value()) {
-        size += (*this->guild).encodedSize();
+        size_ += (*this->guild).encodedSize();
     }
     if (this->title.has_value()) {
-        size += 2 + (*this->title).size();
+        size_ += 2 + (*this->title).size();
     }
     if (this->sides.has_value()) {
-        size += 1;
+        size_ += 1;
     }
     if (this->avatar.has_value()) {
-        size += 1 + (*this->avatar).size();
+        size_ += 1 + (*this->avatar).size();
     }
     if (this->tree.has_value()) {
-        size += (*this->tree).encodedSize();
+        size_ += (*this->tree).encodedSize();
     }
-    return size;
+    return size_;
 }
 
-inline void Profile::writeTo(PacketWriter& writer) const {
-    writer.writeU64(this->id);
-    writer.writeI8(this->level);
-    const bool bonusPresent = this->level == -128;
-    detail::checkPresent(this->bonus, bonusPresent, "bonus");
-    if (bonusPresent) {
-        writer.writeI64(*this->bonus);
+inline void Profile::writeTo(PacketWriter& writer_) const {
+    writer_.writeU64(this->id);
+    writer_.writeI8(this->level);
+    const bool bonusPresent_ = this->level == -128;
+    detail::checkPresent(this->bonus, bonusPresent_, "bonus");
+    if (bonusPresent_) {
+        writer_.writeI64(*this->bonus);
     }
-    std::uint32_t flagsBits = 0;
-    flagsBits |= this->inGuild ? 1u : 0u;
-    flagsBits |= detail::checkBits(this->tier, 3, "tier") << 1;
-    flagsBits |= detail::checkBits(static_cast<std::uint32_t>(this->kind), 2, "kind") << 4;
-    writer.writeU16(static_cast<std::uint16_t>(flagsBits));
-    const bool guildPresent = this->inGuild;
-    detail::checkPresent(this->guild, guildPresent, "guild");
-    if (guildPresent) {
-        (*this->guild).writeTo(writer);
+    std::uint32_t flagsBits_ = 0;
+    flagsBits_ |= this->inGuild ? 1u : 0u;
+    flagsBits_ |= detail::checkBits(this->tier, 3, "tier") << 1;
+    flagsBits_ |= detail::checkBits(static_cast<std::int64_t>(this->kind), 2, "kind") << 4;
+    writer_.writeU16(static_cast<std::uint16_t>(flagsBits_));
+    const bool guildPresent_ = this->inGuild;
+    detail::checkPresent(this->guild, guildPresent_, "guild");
+    if (guildPresent_) {
+        (*this->guild).writeTo(writer_);
     }
-    const bool titlePresent = this->tier == 7;
-    detail::checkPresent(this->title, titlePresent, "title");
-    if (titlePresent) {
-        writer.writeString((*this->title), 2);
+    const bool titlePresent_ = this->tier == 7;
+    detail::checkPresent(this->title, titlePresent_, "title");
+    if (titlePresent_) {
+        writer_.writeString((*this->title), 2);
     }
-    const bool sidesPresent = this->kind == Shape::Polygon;
-    detail::checkPresent(this->sides, sidesPresent, "sides");
-    if (sidesPresent) {
-        writer.writeU8(*this->sides);
+    const bool sidesPresent_ = this->kind == Shape::Polygon;
+    detail::checkPresent(this->sides, sidesPresent_, "sides");
+    if (sidesPresent_) {
+        writer_.writeU8(*this->sides);
     }
-    const bool avatarPresent = this->id == 0u || this->id == 9007199254740991u;
-    detail::checkPresent(this->avatar, avatarPresent, "avatar");
-    if (avatarPresent) {
-        writer.writeBytes((*this->avatar), 1);
+    const bool avatarPresent_ = this->id == 0u || this->id == 9007199254740991u;
+    detail::checkPresent(this->avatar, avatarPresent_, "avatar");
+    if (avatarPresent_) {
+        writer_.writeBytes((*this->avatar), 1);
     }
-    const bool treePresent = this->inGuild;
-    detail::checkPresent(this->tree, treePresent, "tree");
-    if (treePresent) {
-        (*this->tree).writeTo(writer);
+    const bool treePresent_ = this->inGuild;
+    detail::checkPresent(this->tree, treePresent_, "tree");
+    if (treePresent_) {
+        (*this->tree).writeTo(writer_);
     }
 }
 
@@ -151,10 +151,10 @@ inline Profile Profile::readFrom(PacketReader& reader) {
     if (result.level == -128) {
         result.bonus = reader.readI64();
     }
-    const std::uint32_t flagsBits = reader.readU16();
-    result.inGuild = (flagsBits & 0x01u) != 0;
-    result.tier = static_cast<std::uint8_t>((flagsBits >> 1) & 0x07u);
-    result.kind = bitsToShape((flagsBits >> 4) & 0x03u);
+    const std::uint32_t flagsBits_ = reader.readU16();
+    result.inGuild = (flagsBits_ & 0x01u) != 0;
+    result.tier = static_cast<std::uint8_t>((flagsBits_ >> 1) & 0x07u);
+    result.kind = bitsToShape((flagsBits_ >> 4) & 0x03u);
     if (result.inGuild) {
         result.guild = Guild::readFrom(reader);
     }
@@ -173,18 +173,18 @@ inline Profile Profile::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Profile::operator==(const Profile& other) const {
-    return this->id == other.id
-        && this->level == other.level
-        && this->bonus == other.bonus
-        && this->inGuild == other.inGuild
-        && this->tier == other.tier
-        && this->kind == other.kind
-        && this->guild == other.guild
-        && this->title == other.title
-        && this->sides == other.sides
-        && this->avatar == other.avatar
-        && this->tree == other.tree;
+inline bool Profile::operator==(const Profile& other_) const {
+    return this->id == other_.id
+        && this->level == other_.level
+        && this->bonus == other_.bonus
+        && this->inGuild == other_.inGuild
+        && this->tier == other_.tier
+        && this->kind == other_.kind
+        && this->guild == other_.guild
+        && this->title == other_.title
+        && this->sides == other_.sides
+        && this->avatar == other_.avatar
+        && this->tree == other_.tree;
 }
 
 }  // namespace ConditionalFields

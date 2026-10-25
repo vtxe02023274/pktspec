@@ -37,13 +37,13 @@ struct Status final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Status starting at the reader's position. */
     static Status readFrom(PacketReader& reader);
 
-    bool operator==(const Status& other) const;
-    bool operator!=(const Status& other) const { return !(*this == other); }
+    bool operator==(const Status& other_) const;
+    bool operator!=(const Status& other_) const { return !(*this == other_); }
 };
 
 inline Status::Status(
@@ -66,42 +66,42 @@ inline std::size_t Status::bodySize() const {
     return 7;
 }
 
-inline void Status::writeTo(PacketWriter& writer) const {
-    writer.writeU8(this->seq);
-    std::uint32_t stateBits = 0;
-    stateBits |= this->alive ? 1u : 0u;
-    stateBits |= detail::checkBits(static_cast<std::uint32_t>(this->team), 2, "team") << 1;
-    stateBits |= detail::checkBits(this->level, 7, "level") << 3;
-    stateBits |= detail::checkBits(static_cast<std::uint32_t>(this->mood), 2, "mood") << 10;
-    writer.writeU16(static_cast<std::uint16_t>(stateBits));
-    std::uint32_t wideBits = 0;
-    wideBits |= detail::checkBits(this->low, 31, "low");
-    wideBits |= (this->top ? 1u : 0u) << 31;
-    writer.writeU32(wideBits);
+inline void Status::writeTo(PacketWriter& writer_) const {
+    writer_.writeU8(this->seq);
+    std::uint32_t stateBits_ = 0;
+    stateBits_ |= this->alive ? 1u : 0u;
+    stateBits_ |= detail::checkBits(static_cast<std::int64_t>(this->team), 2, "team") << 1;
+    stateBits_ |= detail::checkBits(this->level, 7, "level") << 3;
+    stateBits_ |= detail::checkBits(static_cast<std::int64_t>(this->mood), 2, "mood") << 10;
+    writer_.writeU16(static_cast<std::uint16_t>(stateBits_));
+    std::uint32_t wideBits_ = 0;
+    wideBits_ |= detail::checkBits(this->low, 31, "low");
+    wideBits_ |= (this->top ? 1u : 0u) << 31;
+    writer_.writeU32(wideBits_);
 }
 
 inline Status Status::readFrom(PacketReader& reader) {
     Status result;
     result.seq = reader.readU8();
-    const std::uint32_t stateBits = reader.readU16();
-    result.alive = (stateBits & 0x01u) != 0;
-    result.team = bitsToTeam((stateBits >> 1) & 0x03u);
-    result.level = static_cast<std::uint8_t>((stateBits >> 3) & 0x7Fu);
-    result.mood = bitsToMood((stateBits >> 10) & 0x03u);
-    const std::uint32_t wideBits = reader.readU32();
-    result.low = wideBits & 0x7FFFFFFFu;
-    result.top = ((wideBits >> 31) & 0x01u) != 0;
+    const std::uint32_t stateBits_ = reader.readU16();
+    result.alive = (stateBits_ & 0x01u) != 0;
+    result.team = bitsToTeam((stateBits_ >> 1) & 0x03u);
+    result.level = static_cast<std::uint8_t>((stateBits_ >> 3) & 0x7Fu);
+    result.mood = bitsToMood((stateBits_ >> 10) & 0x03u);
+    const std::uint32_t wideBits_ = reader.readU32();
+    result.low = wideBits_ & 0x7FFFFFFFu;
+    result.top = ((wideBits_ >> 31) & 0x01u) != 0;
     return result;
 }
 
-inline bool Status::operator==(const Status& other) const {
-    return this->seq == other.seq
-        && this->alive == other.alive
-        && this->team == other.team
-        && this->level == other.level
-        && this->mood == other.mood
-        && this->low == other.low
-        && this->top == other.top;
+inline bool Status::operator==(const Status& other_) const {
+    return this->seq == other_.seq
+        && this->alive == other_.alive
+        && this->team == other_.team
+        && this->level == other_.level
+        && this->mood == other_.mood
+        && this->low == other_.low
+        && this->top == other_.top;
 }
 
 }  // namespace BitFields

@@ -22,13 +22,13 @@ struct UserLeft final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a UserLeft starting at the reader's position. */
     static UserLeft readFrom(PacketReader& reader);
 
-    bool operator==(const UserLeft& other) const;
-    bool operator!=(const UserLeft& other) const { return !(*this == other); }
+    bool operator==(const UserLeft& other_) const;
+    bool operator!=(const UserLeft& other_) const { return !(*this == other_); }
 };
 
 inline UserLeft::UserLeft(std::uint32_t roomIdIn, std::uint32_t userIdIn)
@@ -38,9 +38,9 @@ inline std::size_t UserLeft::bodySize() const {
     return 8;
 }
 
-inline void UserLeft::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
-    writer.writeU32(this->userId);
+inline void UserLeft::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
+    writer_.writeU32(this->userId);
 }
 
 inline UserLeft UserLeft::readFrom(PacketReader& reader) {
@@ -50,9 +50,9 @@ inline UserLeft UserLeft::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool UserLeft::operator==(const UserLeft& other) const {
-    return this->roomId == other.roomId
-        && this->userId == other.userId;
+inline bool UserLeft::operator==(const UserLeft& other_) const {
+    return this->roomId == other_.roomId
+        && this->userId == other_.userId;
 }
 
 }  // namespace ChatRoom

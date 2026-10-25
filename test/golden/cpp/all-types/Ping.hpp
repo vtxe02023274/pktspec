@@ -18,13 +18,13 @@ struct Ping final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Ping starting at the reader's position. */
     static Ping readFrom(PacketReader& reader);
 
-    bool operator==(const Ping& other) const;
-    bool operator!=(const Ping& other) const { return !(*this == other); }
+    bool operator==(const Ping& other_) const;
+    bool operator!=(const Ping& other_) const { return !(*this == other_); }
 };
 
 inline std::size_t Ping::bodySize() const {

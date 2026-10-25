@@ -400,6 +400,17 @@ describe('diff bit fields', () => {
     expect(changes[1]!.usedBy).toEqual(['A']);
   });
 
+  it('treats a group at the same position with the same integer as renamed', () => {
+    const group = (name: string, bits: string) =>
+      proto(packets(packet(`{ name: ${name}, type: u8, bits: [${bits}] }`)));
+    expect(
+      brief(
+        group('flags', '{ name: a, type: bool }'),
+        group('state', '{ name: a, type: bool }, { name: z, type: bool }'),
+      ),
+    ).toEqual(['info field-renamed A.state', 'compatible bit-field-added A.state.z']);
+  });
+
   it('points at the bit field in both files', () => {
     const [change] = diff(base, flags('{ name: a, type: bool }, { name: b, bits: 4 }'));
     expect(change!.old).toEqual({ line: 13, column: 75 });
@@ -460,6 +471,55 @@ describe('diff conditional fields', () => {
         ),
     );
     expect(brief(base, renamed)).toEqual(['info field-renamed A.enabled']);
+  });
+
+  const grown = (rest: string) =>
+    proto(
+      packets(
+        packet(
+          `{ name: g, type: u8, bits: [{ name: a, type: bool }, { name: z, type: bool }] }, ${rest}`,
+        ),
+      ),
+    );
+  const before = (rest: string) =>
+    proto(packets(packet(`{ name: g, type: u8, bits: [{ name: a, type: bool }] }, ${rest}`)));
+
+  it('matches the tested field by pairing, not by its flattened position', () => {
+    // The new bit field shifts every later member by one; the condition still tests the flag.
+    expect(
+      brief(
+        before('{ name: flag, type: bool }, { name: x, type: u8, if: flag }'),
+        grown('{ name: has_x, type: bool }, { name: x, type: u8, if: has_x }'),
+      ),
+    ).toEqual(['info field-renamed A.has_x', 'compatible bit-field-added A.g.z']);
+  });
+
+  it('flags a condition that moved to another field even when a bit field group grows', () => {
+    expect(
+      brief(
+        before('{ name: p, type: bool }, { name: q, type: bool }, { name: x, type: u8, if: q }'),
+        grown('{ name: pp, type: bool }, { name: qq, type: bool }, { name: x, type: u8, if: pp }'),
+      ),
+    ).toEqual([
+      'info field-renamed A.pp',
+      'info field-renamed A.qq',
+      'compatible bit-field-added A.g.z',
+      'breaking condition-changed A.x',
+    ]);
+  });
+
+  it('follows a condition on a renamed bit field', () => {
+    const group = (bit: string, test: string) =>
+      proto(
+        packets(
+          packet(
+            `{ name: g, type: u8, bits: [{ name: ${bit}, type: bool }] }, { name: x, type: u8, if: ${test} }`,
+          ),
+        ),
+      );
+    expect(brief(group('on', 'on'), group('enabled', 'enabled'))).toEqual([
+      'info bit-field-renamed A.g.enabled',
+    ]);
   });
 
   it('flags a new conditional field as breaking', () => {

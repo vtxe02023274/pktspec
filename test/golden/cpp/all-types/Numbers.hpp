@@ -42,13 +42,13 @@ struct Numbers final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Numbers starting at the reader's position. */
     static Numbers readFrom(PacketReader& reader);
 
-    bool operator==(const Numbers& other) const;
-    bool operator!=(const Numbers& other) const { return !(*this == other); }
+    bool operator==(const Numbers& other_) const;
+    bool operator!=(const Numbers& other_) const { return !(*this == other_); }
 };
 
 inline Numbers::Numbers(
@@ -79,18 +79,18 @@ inline std::size_t Numbers::bodySize() const {
     return 43;
 }
 
-inline void Numbers::writeTo(PacketWriter& writer) const {
-    writer.writeU8(this->aU8);
-    writer.writeU16(this->aU16);
-    writer.writeU32(this->aU32);
-    writer.writeU64(this->aU64);
-    writer.writeI8(this->aI8);
-    writer.writeI16(this->aI16);
-    writer.writeI32(this->aI32);
-    writer.writeI64(this->aI64);
-    writer.writeF32(this->aF32);
-    writer.writeF64(this->aF64);
-    writer.writeBool(this->aBool);
+inline void Numbers::writeTo(PacketWriter& writer_) const {
+    writer_.writeU8(this->aU8);
+    writer_.writeU16(this->aU16);
+    writer_.writeU32(this->aU32);
+    writer_.writeU64(this->aU64);
+    writer_.writeI8(this->aI8);
+    writer_.writeI16(this->aI16);
+    writer_.writeI32(this->aI32);
+    writer_.writeI64(this->aI64);
+    writer_.writeF32(this->aF32);
+    writer_.writeF64(this->aF64);
+    writer_.writeBool(this->aBool);
 }
 
 inline Numbers Numbers::readFrom(PacketReader& reader) {
@@ -109,18 +109,18 @@ inline Numbers Numbers::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Numbers::operator==(const Numbers& other) const {
-    return this->aU8 == other.aU8
-        && this->aU16 == other.aU16
-        && this->aU32 == other.aU32
-        && this->aU64 == other.aU64
-        && this->aI8 == other.aI8
-        && this->aI16 == other.aI16
-        && this->aI32 == other.aI32
-        && this->aI64 == other.aI64
-        && detail::same(this->aF32, other.aF32)
-        && detail::same(this->aF64, other.aF64)
-        && this->aBool == other.aBool;
+inline bool Numbers::operator==(const Numbers& other_) const {
+    return this->aU8 == other_.aU8
+        && this->aU16 == other_.aU16
+        && this->aU32 == other_.aU32
+        && this->aU64 == other_.aU64
+        && this->aI8 == other_.aI8
+        && this->aI16 == other_.aI16
+        && this->aI32 == other_.aI32
+        && this->aI64 == other_.aI64
+        && detail::same(this->aF32, other_.aF32)
+        && detail::same(this->aF64, other_.aF64)
+        && this->aBool == other_.aBool;
 }
 
 }  // namespace AllTypes

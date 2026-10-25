@@ -42,13 +42,13 @@ struct Collections final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Collections starting at the reader's position. */
     static Collections readFrom(PacketReader& reader);
 
-    bool operator==(const Collections& other) const;
-    bool operator!=(const Collections& other) const { return !(*this == other); }
+    bool operator==(const Collections& other_) const;
+    bool operator!=(const Collections& other_) const { return !(*this == other_); }
 };
 
 inline Collections::Collections(
@@ -66,79 +66,79 @@ inline Collections::Collections(
       kinds(std::move(kindsIn)) {}
 
 inline std::size_t Collections::bodySize() const {
-    std::size_t size = 28;
-    size += this->ids.size() * 4;
-    for (const auto& item : this->names) {
-        size += 2 + item.size();
+    std::size_t size_ = 28;
+    size_ += this->ids.size() * 4;
+    for (const auto& item_ : this->names) {
+        size_ += 2 + item_.size();
     }
-    size += this->path.size() * 4;
-    size += this->kinds.size();
-    return size;
+    size_ += this->path.size() * 4;
+    size_ += this->kinds.size();
+    return size_;
 }
 
-inline void Collections::writeTo(PacketWriter& writer) const {
-    writer.writeLength(this->ids.size(), 2);
-    for (const auto& item : this->ids) {
-        writer.writeU32(item);
+inline void Collections::writeTo(PacketWriter& writer_) const {
+    writer_.writeLength(this->ids.size(), 2);
+    for (const auto& item_ : this->ids) {
+        writer_.writeU32(item_);
     }
-    writer.writeLength(this->names.size(), 1);
-    for (const auto& item : this->names) {
-        writer.writeString(item, 2);
+    writer_.writeLength(this->names.size(), 1);
+    for (const auto& item_ : this->names) {
+        writer_.writeString(item_, 2);
     }
-    for (const auto& item : this->flags) {
-        writer.writeBool(item);
+    for (const auto& item_ : this->flags) {
+        writer_.writeBool(item_);
     }
-    for (const auto& item : this->corners) {
-        item.writeTo(writer);
+    for (const auto& item_ : this->corners) {
+        item_.writeTo(writer_);
     }
-    writer.writeLength(this->path.size(), 4);
-    for (const auto& item : this->path) {
-        item.writeTo(writer);
+    writer_.writeLength(this->path.size(), 4);
+    for (const auto& item_ : this->path) {
+        item_.writeTo(writer_);
     }
-    writer.writeLength(this->kinds.size(), 2);
-    for (const auto& item : this->kinds) {
-        writer.writeI8(static_cast<std::int8_t>(item));
+    writer_.writeLength(this->kinds.size(), 2);
+    for (const auto& item_ : this->kinds) {
+        writer_.writeI8(static_cast<std::int8_t>(item_));
     }
 }
 
 inline Collections Collections::readFrom(PacketReader& reader) {
     Collections result;
-    const std::size_t idsCount = reader.readLength(2);
-    reader.reserveFor(result.ids, idsCount);
-    for (std::size_t i = 0; i < idsCount; ++i) {
+    const std::size_t idsCount_ = reader.readLength(2);
+    reader.reserveFor(result.ids, idsCount_);
+    for (std::size_t i = 0; i < idsCount_; ++i) {
         result.ids.push_back(reader.readU32());
     }
-    const std::size_t namesCount = reader.readLength(1);
-    reader.reserveFor(result.names, namesCount);
-    for (std::size_t i = 0; i < namesCount; ++i) {
+    const std::size_t namesCount_ = reader.readLength(1);
+    reader.reserveFor(result.names, namesCount_);
+    for (std::size_t i = 0; i < namesCount_; ++i) {
         result.names.push_back(reader.readString(2));
     }
-    for (auto& item : result.flags) {
-        item = reader.readBool();
+    for (auto& item_ : result.flags) {
+        item_ = reader.readBool();
     }
-    for (auto& item : result.corners) {
-        item = Point::readFrom(reader);
+    for (auto& item_ : result.corners) {
+        item_ = Point::readFrom(reader);
     }
-    const std::size_t pathCount = reader.readLength(4);
-    reader.reserveFor(result.path, pathCount);
-    for (std::size_t i = 0; i < pathCount; ++i) {
+    const std::size_t pathCount_ = reader.readLength(4);
+    reader.reserveFor(result.path, pathCount_);
+    for (std::size_t i = 0; i < pathCount_; ++i) {
         result.path.push_back(Point::readFrom(reader));
     }
-    const std::size_t kindsCount = reader.readLength(2);
-    reader.reserveFor(result.kinds, kindsCount);
-    for (std::size_t i = 0; i < kindsCount; ++i) {
+    const std::size_t kindsCount_ = reader.readLength(2);
+    reader.reserveFor(result.kinds, kindsCount_);
+    for (std::size_t i = 0; i < kindsCount_; ++i) {
         result.kinds.push_back(readSmall(reader));
     }
     return result;
 }
 
-inline bool Collections::operator==(const Collections& other) const {
-    return detail::same(this->ids, other.ids)
-        && detail::same(this->names, other.names)
-        && detail::same(this->flags, other.flags)
-        && detail::same(this->corners, other.corners)
-        && detail::same(this->path, other.path)
-        && detail::same(this->kinds, other.kinds);
+inline bool Collections::operator==(const Collections& other_) const {
+    return detail::same(this->ids, other_.ids)
+        && detail::same(this->names, other_.names)
+        && detail::same(this->flags, other_.flags)
+        && detail::same(this->corners, other_.corners)
+        && detail::same(this->path, other_.path)
+        && detail::same(this->kinds, other_.kinds);
 }
 
 }  // namespace AllTypes

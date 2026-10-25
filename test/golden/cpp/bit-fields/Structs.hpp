@@ -23,13 +23,13 @@ struct Cell {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Cell starting at the reader's position. */
     static Cell readFrom(PacketReader& reader);
 
-    bool operator==(const Cell& other) const;
-    bool operator!=(const Cell& other) const { return !(*this == other); }
+    bool operator==(const Cell& other_) const;
+    bool operator!=(const Cell& other_) const { return !(*this == other_); }
 };
 
 inline Cell::Cell(bool openIn, Team ownerIn, std::uint16_t idIn)
@@ -39,27 +39,27 @@ inline std::size_t Cell::encodedSize() const {
     return 3;
 }
 
-inline void Cell::writeTo(PacketWriter& writer) const {
-    std::uint32_t flagsBits = 0;
-    flagsBits |= this->open ? 1u : 0u;
-    flagsBits |= detail::checkBits(static_cast<std::uint32_t>(this->owner), 2, "owner") << 1;
-    writer.writeU8(static_cast<std::uint8_t>(flagsBits));
-    writer.writeU16(this->id);
+inline void Cell::writeTo(PacketWriter& writer_) const {
+    std::uint32_t flagsBits_ = 0;
+    flagsBits_ |= this->open ? 1u : 0u;
+    flagsBits_ |= detail::checkBits(static_cast<std::int64_t>(this->owner), 2, "owner") << 1;
+    writer_.writeU8(static_cast<std::uint8_t>(flagsBits_));
+    writer_.writeU16(this->id);
 }
 
 inline Cell Cell::readFrom(PacketReader& reader) {
     Cell result;
-    const std::uint32_t flagsBits = reader.readU8();
-    result.open = (flagsBits & 0x01u) != 0;
-    result.owner = bitsToTeam((flagsBits >> 1) & 0x03u);
+    const std::uint32_t flagsBits_ = reader.readU8();
+    result.open = (flagsBits_ & 0x01u) != 0;
+    result.owner = bitsToTeam((flagsBits_ >> 1) & 0x03u);
     result.id = reader.readU16();
     return result;
 }
 
-inline bool Cell::operator==(const Cell& other) const {
-    return this->open == other.open
-        && this->owner == other.owner
-        && this->id == other.id;
+inline bool Cell::operator==(const Cell& other_) const {
+    return this->open == other_.open
+        && this->owner == other_.owner
+        && this->id == other_.id;
 }
 
 }  // namespace BitFields

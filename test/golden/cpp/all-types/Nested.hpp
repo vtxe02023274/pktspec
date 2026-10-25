@@ -29,13 +29,13 @@ struct Nested final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Nested starting at the reader's position. */
     static Nested readFrom(PacketReader& reader);
 
-    bool operator==(const Nested& other) const;
-    bool operator!=(const Nested& other) const { return !(*this == other); }
+    bool operator==(const Nested& other_) const;
+    bool operator!=(const Nested& other_) const { return !(*this == other_); }
 };
 
 inline Nested::Nested(Point originIn, Node treeIn, Small small_In, Wide wideIn, Empty nothingIn)
@@ -46,17 +46,17 @@ inline Nested::Nested(Point originIn, Node treeIn, Small small_In, Wide wideIn, 
       nothing(std::move(nothingIn)) {}
 
 inline std::size_t Nested::bodySize() const {
-    std::size_t size = 9;
-    size += this->tree.encodedSize();
-    return size;
+    std::size_t size_ = 9;
+    size_ += this->tree.encodedSize();
+    return size_;
 }
 
-inline void Nested::writeTo(PacketWriter& writer) const {
-    this->origin.writeTo(writer);
-    this->tree.writeTo(writer);
-    writer.writeI8(static_cast<std::int8_t>(this->small_));
-    writer.writeU32(static_cast<std::uint32_t>(this->wide));
-    this->nothing.writeTo(writer);
+inline void Nested::writeTo(PacketWriter& writer_) const {
+    this->origin.writeTo(writer_);
+    this->tree.writeTo(writer_);
+    writer_.writeI8(static_cast<std::int8_t>(this->small_));
+    writer_.writeU32(static_cast<std::uint32_t>(this->wide));
+    this->nothing.writeTo(writer_);
 }
 
 inline Nested Nested::readFrom(PacketReader& reader) {
@@ -69,12 +69,12 @@ inline Nested Nested::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Nested::operator==(const Nested& other) const {
-    return this->origin == other.origin
-        && this->tree == other.tree
-        && this->small_ == other.small_
-        && this->wide == other.wide
-        && this->nothing == other.nothing;
+inline bool Nested::operator==(const Nested& other_) const {
+    return this->origin == other_.origin
+        && this->tree == other_.tree
+        && this->small_ == other_.small_
+        && this->wide == other_.wide
+        && this->nothing == other_.nothing;
 }
 
 }  // namespace AllTypes

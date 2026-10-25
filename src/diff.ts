@@ -432,7 +432,8 @@ class Differ {
   /**
    * The wire carries fields back to back with no names or tags, so only order and type matter.
    * Fields are matched by name first; leftovers at the same position with the same wire type
-   * count as renames. Anything still unmatched shifts the bytes that follow.
+   * count as renames, and so do bit field groups on the same integer, whose inside is compared
+   * bit field by bit field. Anything still unmatched shifts the bytes that follow.
    */
   private fields(
     kind: 'packet' | 'struct',
@@ -482,7 +483,9 @@ class Differ {
     a.fields.forEach((f, i) => {
       const g = b.fields[i];
       if (usedOld.has(i) || !g || usedNew.has(i)) return;
-      if (this.sig(f.type, 'old') !== this.sig(g.type, 'new')) return;
+      const sameBits =
+        f.type.kind === 'bits' && g.type.kind === 'bits' && f.type.base === g.type.base;
+      if (!sameBits && this.sig(f.type, 'old') !== this.sig(g.type, 'new')) return;
       renames.push({ old: i, new: i });
       usedOld.add(i);
       usedNew.add(i);
@@ -493,9 +496,22 @@ class Differ {
       const g = b.fields[now]!;
       emit('info', 'field-renamed', g.name, `renamed from '${f.name}'`, f.name, g.name);
     }
+    // Conditions name the member they test; follow it through the same pairing as the fields.
+    const targets = new Map<string, string>();
+    for (const { old, new: now } of [...pairs, ...renames]) {
+      const f = a.fields[old]!;
+      const g = b.fields[now]!;
+      if (f.type.kind === 'bits' && g.type.kind === 'bits') {
+        for (const [i, j] of pairBits(f.type, g.type)) {
+          targets.set(f.type.fields[i]!.name, g.type.fields[j]!.name);
+        }
+      } else if (f.type.kind !== 'bits' && g.type.kind !== 'bits') {
+        targets.set(f.name, g.name);
+      }
+    }
     for (const { old, new: now } of [...pairs, ...renames]) {
       this.fieldChange(a.fields[old]!, b.fields[now]!, emit);
-      this.conditionChange(a.fields, a.fields[old]!, b.fields, b.fields[now]!, emit);
+      this.conditionChange(a.fields, a.fields[old]!, b.fields, b.fields[now]!, targets, emit);
     }
     a.fields.forEach((f, i) => {
       if (!usedOld.has(i))
@@ -509,7 +525,7 @@ class Differ {
     });
     b.fields.forEach((f, i) => {
       if (usedNew.has(i)) return;
-      if (this.onlyNewValues(a.fields, b.fields, f)) {
+      if (this.onlyNewValues(a.fields, b.fields, f, targets)) {
         emit(
           'compatible',
           'field-added',
@@ -596,6 +612,7 @@ class Differ {
     f: Field,
     newFields: Field[],
     g: Field,
+    targets: Map<string, string>,
     emit: (
       s: Severity,
       rule: string,
@@ -625,11 +642,7 @@ class Differ {
         f.name,
         g.name,
       );
-    } else if (
-      f.condition &&
-      g.condition &&
-      !this.sameCondition(oldFields, f.condition, newFields, g.condition)
-    ) {
+    } else if (f.condition && g.condition && !sameCondition(f.condition, g.condition, targets)) {
       emit(
         'breaking',
         'condition-changed',
@@ -641,32 +654,20 @@ class Differ {
     }
   }
 
-  /** Same target, by name or by position for a renamed one, and the same values on the wire. */
-  private sameCondition(
-    oldFields: Field[],
-    a: Condition,
-    newFields: Field[],
-    b: Condition,
-  ): boolean {
-    if (a.kind !== b.kind) return false;
-    const position = (fields: Field[], c: Condition) =>
-      memberFields(fields).findIndex((m) => m.name === c.field);
-    if (a.field !== b.field && position(oldFields, a) !== position(newFields, b)) return false;
-    if (a.kind === 'true' || b.kind === 'true') return true;
-    const values = (c: Extract<Condition, { kind: 'in' }>) =>
-      [...c.values].sort((x, y) => x - y).join(',');
-    return values(a) === values(b);
-  }
-
   /**
    * A new field that is only present for enum values the old version does not define never
    * appears in data that old versions read or write, just like the new values themselves.
    */
-  private onlyNewValues(oldFields: Field[], newFields: Field[], field: Field): boolean {
+  private onlyNewValues(
+    oldFields: Field[],
+    newFields: Field[],
+    field: Field,
+    targets: Map<string, string>,
+  ): boolean {
     const { condition } = field;
     if (condition?.kind !== 'in') return false;
     const target = memberFields(newFields).find((m) => m.name === condition.field);
-    const before = memberFields(oldFields).find((m) => m.name === condition.field);
+    const before = memberFields(oldFields).find((m) => targets.get(m.name) === condition.field);
     if (target?.type.kind !== 'enum' || before?.type.kind !== 'enum') return false;
     const name = target.type.name;
     if (before.type.name !== name) return false;
@@ -692,11 +693,15 @@ class Differ {
       : `${name} is one of ${values.join(', ')}`;
   }
 
-  /** The condition by the position of the member it tests, since names do not reach the wire. */
+  /**
+   * The condition by the position of the member it tests, since names do not reach the wire. A bit
+   * field counts by its group and its place in the group, so a group that grows does not shift the
+   * members after it.
+   */
   private conditionSig(fields: Field[], field: Field): string {
     const { condition } = field;
     if (!condition) return '';
-    const position = memberFields(fields).findIndex((m) => m.name === condition.field);
+    const position = targetPosition(fields, condition.field);
     if (condition.kind === 'true') return `?${position}`;
     return `?${position}=${[...condition.values].sort((x, y) => x - y).join(',')}`;
   }
@@ -724,33 +729,16 @@ class Differ {
     const after = bitLayout(b.fields);
     const span = (p: { field: BitField; offset: number }) =>
       p.field.bits === 1 ? `bit ${p.offset}` : `bits ${p.offset}-${p.offset + p.field.bits - 1}`;
-    const kind = (field: BitField) =>
-      field.type.kind === 'enum'
-        ? field.type.name
-        : field.type.kind === 'bool'
-          ? 'bool'
-          : 'unsigned';
     const at = (old?: BitField, now?: BitField) =>
       [old && `${oldGroup}/bit:${old.name}`, now && `${newGroup}/bit:${now.name}`] as const;
 
-    const pairs: Array<[number, number]> = [];
-    const usedOld = new Set<number>();
-    const usedNew = new Set<number>();
-    before.forEach((p, i) => {
-      const j = after.findIndex((q) => q.field.name === p.field.name);
-      if (j < 0) return;
-      pairs.push([i, j]);
-      usedOld.add(i);
-      usedNew.add(j);
-    });
-    before.forEach((p, i) => {
-      const q = after[i];
-      if (usedOld.has(i) || !q || usedNew.has(i)) return;
-      if (p.offset !== q.offset || p.field.bits !== q.field.bits) return;
-      if (kind(p.field) !== kind(q.field)) return;
-      pairs.push([i, i]);
-      usedOld.add(i);
-      usedNew.add(i);
+    const pairs = pairBits(a, b);
+    const usedOld = new Set(pairs.map(([i]) => i));
+    const usedNew = new Set(pairs.map(([, j]) => j));
+    for (const [i, j] of pairs) {
+      const p = before[i]!;
+      const q = after[j]!;
+      if (p.field.name === q.field.name) continue;
       emit(
         'info',
         'bit-field-renamed',
@@ -758,9 +746,9 @@ class Differ {
         `renamed from '${p.field.name}'`,
         ...at(p.field, q.field),
       );
-    });
+    }
 
-    for (const [i, j] of pairs.sort((x, y) => x[0] - y[0])) {
+    for (const [i, j] of [...pairs].sort((x, y) => x[0] - y[0])) {
       const p = before[i]!;
       const q = after[j]!;
       const path = `${newGroup}.${q.field.name}`;
@@ -781,12 +769,12 @@ class Differ {
           ...at(p.field, q.field),
         );
       }
-      if (kind(p.field) !== kind(q.field)) {
+      if (bitKind(p.field) !== bitKind(q.field)) {
         emit(
           'breaking',
           'bit-field-type-changed',
           path,
-          `type changed from ${kind(p.field)} to ${kind(q.field)}`,
+          `type changed from ${bitKind(p.field)} to ${bitKind(q.field)}`,
           ...at(p.field, q.field),
         );
       }
@@ -829,7 +817,7 @@ class Differ {
         'bit-field-added',
         path,
         noZero
-          ? `added (${span(q)}) in unused bits, but old versions send 0, which enum '${kind(q.field)}' does not define`
+          ? `added (${span(q)}) in unused bits, but old versions send 0, which enum '${bitKind(q.field)}' does not define`
           : `added (${span(q)}) in unused bits, which old versions write as 0 and ignore`,
         ...where,
       );
@@ -925,6 +913,64 @@ class Differ {
     if (at.new) change.new = at.new;
     this.changes.push(change);
   }
+}
+
+function bitKind(field: BitField): string {
+  return field.type.kind === 'enum'
+    ? field.type.name
+    : field.type.kind === 'bool'
+      ? 'bool'
+      : 'unsigned';
+}
+
+/**
+ * Bit fields by name first, then leftovers at the same offset with the same size and kind as
+ * renames. The indexes are into the `fields` of each group.
+ */
+function pairBits(a: BitsType, b: BitsType): Array<[number, number]> {
+  const before = bitLayout(a.fields);
+  const after = bitLayout(b.fields);
+  const pairs: Array<[number, number]> = [];
+  const usedOld = new Set<number>();
+  const usedNew = new Set<number>();
+  before.forEach((p, i) => {
+    const j = after.findIndex((q) => q.field.name === p.field.name);
+    if (j < 0) return;
+    pairs.push([i, j]);
+    usedOld.add(i);
+    usedNew.add(j);
+  });
+  before.forEach((p, i) => {
+    const q = after[i];
+    if (usedOld.has(i) || !q || usedNew.has(i)) return;
+    if (p.offset !== q.offset || p.field.bits !== q.field.bits) return;
+    if (bitKind(p.field) !== bitKind(q.field)) return;
+    pairs.push([i, i]);
+    usedOld.add(i);
+    usedNew.add(i);
+  });
+  return pairs;
+}
+
+/** Same target through the field and bit field pairing, and the same values on the wire. */
+function sameCondition(a: Condition, b: Condition, targets: Map<string, string>): boolean {
+  if (a.kind !== b.kind) return false;
+  if (targets.get(a.field) !== b.field) return false;
+  if (a.kind === 'true' || b.kind === 'true') return true;
+  const values = (c: Extract<Condition, { kind: 'in' }>) =>
+    [...c.values].sort((x, y) => x - y).join(',');
+  return values(a) === values(b);
+}
+
+/** `field` or `field.bit` by index, so a bit field group that grows shifts nothing after it. */
+function targetPosition(fields: Field[], name: string): string {
+  for (const [i, f] of fields.entries()) {
+    if (f.name === name) return String(i);
+    if (f.type.kind !== 'bits') continue;
+    const j = f.type.fields.findIndex((bit) => bit.name === name);
+    if (j >= 0) return `${i}.${j}`;
+  }
+  return '';
 }
 
 function match<T extends { name: string }>(before: T[], after: T[]) {

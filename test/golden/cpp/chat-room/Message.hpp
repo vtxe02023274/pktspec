@@ -35,13 +35,13 @@ struct Message final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Message starting at the reader's position. */
     static Message readFrom(PacketReader& reader);
 
-    bool operator==(const Message& other) const;
-    bool operator!=(const Message& other) const { return !(*this == other); }
+    bool operator==(const Message& other_) const;
+    bool operator!=(const Message& other_) const { return !(*this == other_); }
 };
 
 inline Message::Message(
@@ -52,16 +52,16 @@ inline Message::Message(
     : roomId(roomIdIn), senderId(senderIdIn), text(std::move(textIn)), sentAt(sentAtIn) {}
 
 inline std::size_t Message::bodySize() const {
-    std::size_t size = 16;
-    size += 2 + this->text.size();
-    return size;
+    std::size_t size_ = 16;
+    size_ += 2 + this->text.size();
+    return size_;
 }
 
-inline void Message::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
-    writer.writeU32(this->senderId);
-    writer.writeString(this->text, 2);
-    writer.writeI64(this->sentAt);
+inline void Message::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
+    writer_.writeU32(this->senderId);
+    writer_.writeString(this->text, 2);
+    writer_.writeI64(this->sentAt);
 }
 
 inline Message Message::readFrom(PacketReader& reader) {
@@ -73,11 +73,11 @@ inline Message Message::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Message::operator==(const Message& other) const {
-    return this->roomId == other.roomId
-        && this->senderId == other.senderId
-        && this->text == other.text
-        && this->sentAt == other.sentAt;
+inline bool Message::operator==(const Message& other_) const {
+    return this->roomId == other_.roomId
+        && this->senderId == other_.senderId
+        && this->text == other_.text
+        && this->sentAt == other_.sentAt;
 }
 
 }  // namespace ChatRoom

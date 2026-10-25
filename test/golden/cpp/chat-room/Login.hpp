@@ -34,13 +34,13 @@ struct Login final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a Login starting at the reader's position. */
     static Login readFrom(PacketReader& reader);
 
-    bool operator==(const Login& other) const;
-    bool operator!=(const Login& other) const { return !(*this == other); }
+    bool operator==(const Login& other_) const;
+    bool operator!=(const Login& other_) const { return !(*this == other_); }
 };
 
 inline Login::Login(
@@ -52,15 +52,15 @@ inline Login::Login(
       clientVersion(clientVersionIn) {}
 
 inline std::size_t Login::bodySize() const {
-    std::size_t size = 34;
-    size += 1 + this->account.size();
-    return size;
+    std::size_t size_ = 34;
+    size_ += 1 + this->account.size();
+    return size_;
 }
 
-inline void Login::writeTo(PacketWriter& writer) const {
-    writer.writeString(this->account, 1);
-    writer.writeFixedBytes(this->passwordHash);
-    writer.writeU16(this->clientVersion);
+inline void Login::writeTo(PacketWriter& writer_) const {
+    writer_.writeString(this->account, 1);
+    writer_.writeFixedBytes(this->passwordHash);
+    writer_.writeU16(this->clientVersion);
 }
 
 inline Login Login::readFrom(PacketReader& reader) {
@@ -71,10 +71,10 @@ inline Login Login::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Login::operator==(const Login& other) const {
-    return this->account == other.account
-        && this->passwordHash == other.passwordHash
-        && this->clientVersion == other.clientVersion;
+inline bool Login::operator==(const Login& other_) const {
+    return this->account == other_.account
+        && this->passwordHash == other_.passwordHash
+        && this->clientVersion == other_.clientVersion;
 }
 
 }  // namespace ChatRoom

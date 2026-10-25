@@ -25,28 +25,28 @@ struct User {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a User starting at the reader's position. */
     static User readFrom(PacketReader& reader);
 
-    bool operator==(const User& other) const;
-    bool operator!=(const User& other) const { return !(*this == other); }
+    bool operator==(const User& other_) const;
+    bool operator!=(const User& other_) const { return !(*this == other_); }
 };
 
 inline User::User(std::uint32_t idIn, std::string nicknameIn, std::uint8_t levelIn)
     : id(idIn), nickname(std::move(nicknameIn)), level(levelIn) {}
 
 inline std::size_t User::encodedSize() const {
-    std::size_t size = 5;
-    size += 1 + this->nickname.size();
-    return size;
+    std::size_t size_ = 5;
+    size_ += 1 + this->nickname.size();
+    return size_;
 }
 
-inline void User::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->id);
-    writer.writeString(this->nickname, 1);
-    writer.writeU8(this->level);
+inline void User::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->id);
+    writer_.writeString(this->nickname, 1);
+    writer_.writeU8(this->level);
 }
 
 inline User User::readFrom(PacketReader& reader) {
@@ -57,10 +57,10 @@ inline User User::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool User::operator==(const User& other) const {
-    return this->id == other.id
-        && this->nickname == other.nickname
-        && this->level == other.level;
+inline bool User::operator==(const User& other_) const {
+    return this->id == other_.id
+        && this->nickname == other_.nickname
+        && this->level == other_.level;
 }
 
 }  // namespace ChatRoom

@@ -27,32 +27,32 @@ struct RoomJoined final : public Packet {
 
     std::size_t bodySize() const override;
 
-    void writeTo(PacketWriter& writer) const override;
+    void writeTo(PacketWriter& writer_) const override;
 
     /** Reads a RoomJoined starting at the reader's position. */
     static RoomJoined readFrom(PacketReader& reader);
 
-    bool operator==(const RoomJoined& other) const;
-    bool operator!=(const RoomJoined& other) const { return !(*this == other); }
+    bool operator==(const RoomJoined& other_) const;
+    bool operator!=(const RoomJoined& other_) const { return !(*this == other_); }
 };
 
 inline RoomJoined::RoomJoined(std::uint32_t roomIdIn, RoomKind kindIn, std::vector<User> membersIn)
     : roomId(roomIdIn), kind(kindIn), members(std::move(membersIn)) {}
 
 inline std::size_t RoomJoined::bodySize() const {
-    std::size_t size = 6;
-    for (const auto& item : this->members) {
-        size += item.encodedSize();
+    std::size_t size_ = 6;
+    for (const auto& item_ : this->members) {
+        size_ += item_.encodedSize();
     }
-    return size;
+    return size_;
 }
 
-inline void RoomJoined::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->roomId);
-    writer.writeU8(static_cast<std::uint8_t>(this->kind));
-    writer.writeLength(this->members.size(), 1);
-    for (const auto& item : this->members) {
-        item.writeTo(writer);
+inline void RoomJoined::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->roomId);
+    writer_.writeU8(static_cast<std::uint8_t>(this->kind));
+    writer_.writeLength(this->members.size(), 1);
+    for (const auto& item_ : this->members) {
+        item_.writeTo(writer_);
     }
 }
 
@@ -60,18 +60,18 @@ inline RoomJoined RoomJoined::readFrom(PacketReader& reader) {
     RoomJoined result;
     result.roomId = reader.readU32();
     result.kind = readRoomKind(reader);
-    const std::size_t membersCount = reader.readLength(1);
-    reader.reserveFor(result.members, membersCount);
-    for (std::size_t i = 0; i < membersCount; ++i) {
+    const std::size_t membersCount_ = reader.readLength(1);
+    reader.reserveFor(result.members, membersCount_);
+    for (std::size_t i = 0; i < membersCount_; ++i) {
         result.members.push_back(User::readFrom(reader));
     }
     return result;
 }
 
-inline bool RoomJoined::operator==(const RoomJoined& other) const {
-    return this->roomId == other.roomId
-        && this->kind == other.kind
-        && detail::same(this->members, other.members);
+inline bool RoomJoined::operator==(const RoomJoined& other_) const {
+    return this->roomId == other_.roomId
+        && this->kind == other_.kind
+        && detail::same(this->members, other_.members);
 }
 
 }  // namespace ChatRoom

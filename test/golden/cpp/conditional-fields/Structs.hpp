@@ -27,13 +27,13 @@ struct Point {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Point starting at the reader's position. */
     static Point readFrom(PacketReader& reader);
 
-    bool operator==(const Point& other) const;
-    bool operator!=(const Point& other) const { return !(*this == other); }
+    bool operator==(const Point& other_) const;
+    bool operator!=(const Point& other_) const { return !(*this == other_); }
 };
 
 struct Guild {
@@ -51,13 +51,13 @@ struct Guild {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Guild starting at the reader's position. */
     static Guild readFrom(PacketReader& reader);
 
-    bool operator==(const Guild& other) const;
-    bool operator!=(const Guild& other) const { return !(*this == other); }
+    bool operator==(const Guild& other_) const;
+    bool operator!=(const Guild& other_) const { return !(*this == other_); }
 };
 
 /** Recursive through a conditional array. */
@@ -73,13 +73,13 @@ struct Node {
     std::size_t encodedSize() const;
 
     /** Writes this struct. */
-    void writeTo(PacketWriter& writer) const;
+    void writeTo(PacketWriter& writer_) const;
 
     /** Reads a Node starting at the reader's position. */
     static Node readFrom(PacketReader& reader);
 
-    bool operator==(const Node& other) const;
-    bool operator!=(const Node& other) const { return !(*this == other); }
+    bool operator==(const Node& other_) const;
+    bool operator!=(const Node& other_) const { return !(*this == other_); }
 };
 
 inline Point::Point(std::int16_t xIn, std::int16_t yIn)
@@ -89,9 +89,9 @@ inline std::size_t Point::encodedSize() const {
     return 4;
 }
 
-inline void Point::writeTo(PacketWriter& writer) const {
-    writer.writeI16(this->x);
-    writer.writeI16(this->y);
+inline void Point::writeTo(PacketWriter& writer_) const {
+    writer_.writeI16(this->x);
+    writer_.writeI16(this->y);
 }
 
 inline Point Point::readFrom(PacketReader& reader) {
@@ -101,9 +101,9 @@ inline Point Point::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Point::operator==(const Point& other) const {
-    return this->x == other.x
-        && this->y == other.y;
+inline bool Point::operator==(const Point& other_) const {
+    return this->x == other_.x
+        && this->y == other_.y;
 }
 
 inline Guild::Guild(
@@ -113,20 +113,20 @@ inline Guild::Guild(
     : id(idIn), hasEmblem(hasEmblemIn), emblem(std::move(emblemIn)) {}
 
 inline std::size_t Guild::encodedSize() const {
-    std::size_t size = 5;
+    std::size_t size_ = 5;
     if (this->emblem.has_value()) {
-        size += 4;
+        size_ += 4;
     }
-    return size;
+    return size_;
 }
 
-inline void Guild::writeTo(PacketWriter& writer) const {
-    writer.writeU32(this->id);
-    writer.writeBool(this->hasEmblem);
-    const bool emblemPresent = this->hasEmblem;
-    detail::checkPresent(this->emblem, emblemPresent, "emblem");
-    if (emblemPresent) {
-        writer.writeFixedBytes(*this->emblem);
+inline void Guild::writeTo(PacketWriter& writer_) const {
+    writer_.writeU32(this->id);
+    writer_.writeBool(this->hasEmblem);
+    const bool emblemPresent_ = this->hasEmblem;
+    detail::checkPresent(this->emblem, emblemPresent_, "emblem");
+    if (emblemPresent_) {
+        writer_.writeFixedBytes(*this->emblem);
     }
 }
 
@@ -140,10 +140,10 @@ inline Guild Guild::readFrom(PacketReader& reader) {
     return result;
 }
 
-inline bool Guild::operator==(const Guild& other) const {
-    return this->id == other.id
-        && this->hasEmblem == other.hasEmblem
-        && this->emblem == other.emblem;
+inline bool Guild::operator==(const Guild& other_) const {
+    return this->id == other_.id
+        && this->hasEmblem == other_.hasEmblem
+        && this->emblem == other_.emblem;
 }
 
 inline Node::Node(
@@ -153,25 +153,25 @@ inline Node::Node(
     : value(valueIn), hasChildren(hasChildrenIn), children(std::move(childrenIn)) {}
 
 inline std::size_t Node::encodedSize() const {
-    std::size_t size = 2;
+    std::size_t size_ = 2;
     if (this->children.has_value()) {
-        size += 1;
-        for (const auto& item : (*this->children)) {
-            size += item.encodedSize();
+        size_ += 1;
+        for (const auto& item_ : (*this->children)) {
+            size_ += item_.encodedSize();
         }
     }
-    return size;
+    return size_;
 }
 
-inline void Node::writeTo(PacketWriter& writer) const {
-    writer.writeU8(this->value);
-    writer.writeBool(this->hasChildren);
-    const bool childrenPresent = this->hasChildren;
-    detail::checkPresent(this->children, childrenPresent, "children");
-    if (childrenPresent) {
-        writer.writeLength((*this->children).size(), 1);
-        for (const auto& item : (*this->children)) {
-            item.writeTo(writer);
+inline void Node::writeTo(PacketWriter& writer_) const {
+    writer_.writeU8(this->value);
+    writer_.writeBool(this->hasChildren);
+    const bool childrenPresent_ = this->hasChildren;
+    detail::checkPresent(this->children, childrenPresent_, "children");
+    if (childrenPresent_) {
+        writer_.writeLength((*this->children).size(), 1);
+        for (const auto& item_ : (*this->children)) {
+            item_.writeTo(writer_);
         }
     }
 }
@@ -181,20 +181,20 @@ inline Node Node::readFrom(PacketReader& reader) {
     result.value = reader.readU8();
     result.hasChildren = reader.readBool();
     if (result.hasChildren) {
-        const std::size_t childrenCount = reader.readLength(1);
+        const std::size_t childrenCount_ = reader.readLength(1);
         result.children.emplace();
-        reader.reserveFor((*result.children), childrenCount);
-        for (std::size_t i = 0; i < childrenCount; ++i) {
+        reader.reserveFor((*result.children), childrenCount_);
+        for (std::size_t i = 0; i < childrenCount_; ++i) {
             (*result.children).push_back(Node::readFrom(reader));
         }
     }
     return result;
 }
 
-inline bool Node::operator==(const Node& other) const {
-    return this->value == other.value
-        && this->hasChildren == other.hasChildren
-        && detail::same(this->children, other.children);
+inline bool Node::operator==(const Node& other_) const {
+    return this->value == other_.value
+        && this->hasChildren == other_.hasChildren
+        && detail::same(this->children, other_.children);
 }
 
 }  // namespace ConditionalFields

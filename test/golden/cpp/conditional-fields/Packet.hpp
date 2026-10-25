@@ -16,13 +16,14 @@ namespace ConditionalFields {
 
 namespace detail {
 
-// Throws PacketRangeError if the value of a bit field does not fit in its bits.
-inline std::uint32_t checkBits(std::uint32_t value, unsigned bits, const char* field) {
-    if (bits < 32 && (value >> bits) != 0) {
+// Throws PacketRangeError if the value of a bit field does not fit in its bits. The value is
+// signed and 64 bits wide so that a negative enum is rejected even in a 32-bit field.
+inline std::uint32_t checkBits(std::int64_t value, unsigned bits, const char* field) {
+    if (value < 0 || (value >> bits) != 0) {
         throw PacketRangeError(std::string(field) + " out of range for " + std::to_string(bits) +
                                " bits: " + std::to_string(value));
     }
-    return value;
+    return static_cast<std::uint32_t>(value);
 }
 
 // Throws PacketRangeError unless a conditional field holds a value exactly when its condition is true.

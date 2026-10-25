@@ -234,6 +234,11 @@ function errorChecks(protocol: Protocol): string[] {
       `expect(static_cast<const Status&>(*${decode('1, 0, 0, 0x84, 0, 0, 0, 0')}) == Status(), "unused bits");`,
     );
   }
+  if (protocol.name === 'mutual') {
+    checks.push(
+      'throwsAs<PacketRangeError>([] { Shadow p; p.signed_ = static_cast<Signed>(-1); p.encode(); }, "negative enum in 32 bits");',
+    );
+  }
   if (protocol.name === 'conditional_fields') {
     const draw = (setup: string) => `[] { Draw p; ${setup} p.encode(); }`;
     const polygon = 'p.shape = Shape::Polygon; p.corner = Point(); p.points.emplace();';
@@ -419,6 +424,7 @@ function runRoundTrip(protocol: Protocol): string[] {
         '-Wextra',
         '-Werror',
         '-pedantic',
+        '-Wshadow',
         `-I${join(dir, 'gen')}`,
         join(dir, 'main.cpp'),
         '-o',
@@ -443,6 +449,11 @@ enums:
     values:
       RED: 1
       BLUE: 2
+  Signed:
+    type: i32
+    values:
+      ZERO: 0
+      ONE: 1
 structs:
   Alpha:
     fields:
@@ -463,6 +474,27 @@ packets:
       - { name: opcode, type: Alpha }
       - { name: delete, type: 'Beta[]', length: u8 }
       - { name: ids, type: 'bool[]' }
+  # Members named like the locals and parameters of the generated functions.
+  - name: Shadow
+    opcode: 1
+    direction: c2s
+    fields:
+      - name: flags
+        type: u8
+        bits:
+          - { name: on, type: bool }
+      - { name: flags_bits, type: u8 }
+      - { name: data, type: 'Beta[]', length: u8, if: on }
+      - { name: data_present, type: u8 }
+      - { name: data_count, type: u8 }
+      - { name: size, type: string, length: u8 }
+      - { name: item, type: u8 }
+      - { name: writer, type: u8 }
+      - { name: other, type: u8 }
+      - name: wide
+        type: u32
+        bits:
+          - { name: signed, type: Signed, bits: 32 }
 `;
 
 function mutual(): Protocol {
@@ -512,8 +544,9 @@ describe.skipIf(!compiler)('C++ round trip', () => {
     );
   }, 240_000);
 
-  it('compiles structs that hold arrays of each other and members named like keywords', () => {
+  it('compiles structs that hold arrays of each other and members named like keywords or locals', () => {
     const lines = runRoundTrip(mutual());
     expect(lines.filter((l) => l.startsWith('Forest '))).toHaveLength(2);
+    expect(lines.filter((l) => l.startsWith('Shadow '))).toHaveLength(2);
   }, 240_000);
 });
