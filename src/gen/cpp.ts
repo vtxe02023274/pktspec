@@ -53,7 +53,28 @@ const KEYWORDS = new Set(
 );
 
 // Lowercase names that platform headers define as macros, which would rewrite a member of that name.
-const MACRO_NAMES = ['assert', 'errno', 'far', 'interface', 'linux', 'max', 'min', 'near', 'small'];
+const MACRO_NAMES = [
+  'alloca',
+  'assert',
+  'cdecl',
+  'environ',
+  'errno',
+  'far',
+  'h_errno',
+  'hyper',
+  'interface',
+  'linux',
+  'max',
+  'min',
+  'near',
+  'offsetof',
+  'pascal',
+  'setjmp',
+  'small',
+  'stderr',
+  'stdin',
+  'stdout',
+];
 
 // Names the generated files use unqualified, or that would hide one of them inside the namespace.
 const RESERVED_TYPE_NAMES = [

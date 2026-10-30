@@ -92,6 +92,8 @@ describe('generateCpp', () => {
         { name: 'body_size', type: u8 },
         { name: 'new', type: u8 },
         { name: 'class_', type: u8 },
+        { name: 'stdin', type: u8 },
+        { name: 'offsetof', type: u8 },
       ],
     });
     const file = generateCpp(protocol).find((f) => f.path === 'Clashes.hpp')!;
@@ -101,6 +103,8 @@ describe('generateCpp', () => {
     expect(file.content).toContain('std::uint8_t bodySize_{};');
     expect(file.content).toContain('std::uint8_t new_{};');
     expect(file.content).toContain('std::uint8_t class__{};');
+    expect(file.content).toContain('std::uint8_t stdin_{};');
+    expect(file.content).toContain('std::uint8_t offsetof_{};');
   });
 
   it('keeps constructor parameters apart from members', () => {
